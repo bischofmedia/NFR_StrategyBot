@@ -12,20 +12,27 @@ from ui import ConfirmDataView, make_modal, SuggestLapTimeView, seconds_to_displ
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN            = os.getenv("DISCORD_TOKEN")
 ALLOWED_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID"))
+GUILD_ID         = int(os.getenv("DISCORD_GUILD_ID", "0"))
 
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot  = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
 
 @bot.event
 async def on_ready():
-    await tree.sync()
-    print(f"✅ Bot eingeloggt als {bot.user} | Commands synchronisiert")
+    if GUILD_ID:
+        guild = discord.Object(id=GUILD_ID)
+        tree.copy_global_to(guild=guild)
+        await tree.sync(guild=guild)
+        print(f"✅ Bot eingeloggt als {bot.user} | Commands synchronisiert (Guild {GUILD_ID})")
+    else:
+        await tree.sync()
+        print(f"✅ Bot eingeloggt als {bot.user} | Commands global synchronisiert")
 
 
 def check_channel():
@@ -126,15 +133,15 @@ class CarSelectView(discord.ui.View):
                 ),
                 color=0xFFA500
             )
-            embed.add_field(name="🔴 Soft",   value=seconds_to_display(float(existing["Zeit_Soft_s"])),   inline=True)
+            embed.add_field(name="🔴 Soft",   value=seconds_to_display(float(existing["Zeit_Soft_s"])), inline=True)
             embed.add_field(name="🟡 Medium", value=seconds_to_display(float(existing["Zeit_Medium_s"])) if existing.get("Zeit_Medium_s") else "–", inline=True)
             if self.hard_enabled:
                 embed.add_field(name="⚪ Hard", value=seconds_to_display(float(existing["Zeit_Hard_s"])) if existing.get("Zeit_Hard_s") else "–", inline=True)
-            embed.add_field(name="Medium %", value=f"{existing.get('Medium_Pct', '–')}%", inline=True)
+            embed.add_field(name="Medium %",         value=f"{existing.get('Medium_Pct', '–')}%",          inline=True)
             if self.hard_enabled:
-                embed.add_field(name="Hard %", value=f"{existing.get('Hard_Pct', '–')}%", inline=True)
-            embed.add_field(name="Max. Soft-Runden",  value=existing["Max_Soft_Runden"],          inline=True)
-            embed.add_field(name="Reichweite 70%",    value=f"{existing['Reichweite_70pct']} Runden", inline=True)
+                embed.add_field(name="Hard %",       value=f"{existing.get('Hard_Pct', '–')}%",            inline=True)
+            embed.add_field(name="Max. Soft-Runden", value=existing["Max_Soft_Runden"],                    inline=True)
+            embed.add_field(name="Reichweite 70%",   value=f"{existing['Reichweite_70pct']} Runden",       inline=True)
             embed.add_field(name="Zuletzt aktualisiert", value=existing.get("Letzte_Aktualisierung", "–"), inline=True)
 
             view = ConfirmDataView(
@@ -164,11 +171,8 @@ class CarSelectView(discord.ui.View):
                     )
                 )
             else:
-                # Kein Vorschlag – Modal mit Durchschnitts-Prefill öffnen
-                prefill = build_prefill(
-                    0, self.nickname, self.settings, self.hard_enabled, existing=None
-                )
-                modal = make_modal(
+                prefill = build_prefill(0, self.nickname, self.settings, self.hard_enabled)
+                modal   = make_modal(
                     self.nickname, self.track, self.version, car,
                     self.total_laps, self.channel, self.hard_enabled, prefill=prefill
                 )
@@ -192,7 +196,7 @@ async def naechstes_rennen(interaction: discord.Interaction):
     track_display = f"{track} – {version}" if version else track
 
     embed = discord.Embed(title="📅 Nächstes Rennen", color=0x00BFFF)
-    embed.add_field(name="🏟️ Strecke", value=track_display, inline=True)
+    embed.add_field(name="🏟️ Strecke", value=track_display,          inline=True)
     embed.add_field(name="📆 Datum",   value=race.get("Datum", "–"),  inline=True)
     embed.add_field(name="🔄 Runden",  value=race.get("Runden", "–"), inline=True)
     embed.set_footer(text="NFR Strategy Bot • GT7")
