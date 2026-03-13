@@ -1,6 +1,7 @@
 import os
 import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from strategy import StrategyResult, TYRE_SOFT, TYRE_MEDIUM, TYRE_HARD
 
 
@@ -94,9 +95,7 @@ Antworte AUSSCHLIESSLICH mit folgendem JSON – kein Text davor oder danach, kei
 
 
 def _find_matching_result(results: list, stints_json: list) -> StrategyResult | None:
-    """Findet das passende StrategyResult anhand der Stint-Struktur aus dem Gemini-JSON."""
     target = tuple((s["tyre"], s["laps"]) for s in stints_json)
-    # Exakter Match zuerst
     for r in results:
         if tuple(r.stints) == target:
             return r
@@ -135,14 +134,7 @@ def get_gemini_strategies(
         return None
 
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            generation_config=genai.GenerationConfig(
-                temperature=0,
-                response_mime_type="application/json",
-            )
-        )
+        client = genai.Client(api_key=api_key)
 
         prompt = _build_prompt(
             all_results_pole, all_results_no_pole,
@@ -152,7 +144,15 @@ def get_gemini_strategies(
             start_fuel_pct, pit_loss, fuel_weight_s, hard_enabled,
         )
 
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+            ),
+        )
+
         raw = response.text.strip()
         # Sicherheits-Strip falls doch Backticks kommen
         if raw.startswith("```"):
@@ -177,7 +177,6 @@ def get_gemini_strategies(
                 continue
             match = _find_matching_result(primary_pool, s["stints"])
             if match is None:
-                # Fallback: im anderen Pool suchen
                 other = all_results_no_pole if primary_pool is all_results_pole else all_results_pole
                 match = _find_matching_result(other, s["stints"])
             result["strategies"][label] = match
@@ -201,7 +200,8 @@ def fallback_strategies(all_results_pole: list, all_results_no_pole: list) -> di
         return next((r for r in results if r.pit_stops == stops), None)
 
     def fmt(s):
-        mins = int(s // 60); secs = s % 60
+        mins = int(s // 60)
+        secs = s % 60
         return f"{mins}:{secs:05.1f}"
 
     strategies = {
