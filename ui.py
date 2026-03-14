@@ -72,8 +72,11 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
     all_pole    = calculate_strategies(**common, pole=True)
     all_no_pole = calculate_strategies(**common, pole=False)
 
-    gemini_result = get_gemini_strategies(
-        all_results_pole=all_pole,
+    gemini_aktiv = settings.get("gemini", "TRUE").upper() != "FALSE"
+    gemini_result = None
+    if gemini_aktiv:
+        gemini_result = get_gemini_strategies(
+            all_results_pole=all_pole,
         all_results_no_pole=all_no_pole,
         track=track, version=version, car=car_display,
         total_laps=total_laps,

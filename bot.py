@@ -124,23 +124,25 @@ class BrandSelectView(discord.ui.View):
         self.add_item(select)
 
     async def brand_selected(self, interaction: discord.Interaction):
+        # Sofort bestätigen bevor irgendwas geladen wird
+        await interaction.response.defer(ephemeral=True)
+
         brand  = interaction.data["values"][0]
         models = self.brands_models.get(brand, [])
 
-        # Nur ein Modell → direkt weiter ohne zweites Dropdown
         if len(models) == 1:
             await proceed_to_car(
                 interaction, self.nickname, self.track, self.version,
                 self.total_laps, brand, models[0],
                 self.channel, self.settings, self.hard_enabled,
-                edit=True
+                use_followup=True
             )
         else:
             view = ModelSelectView(
                 self.nickname, self.track, self.version, self.total_laps,
                 brand, models, self.channel, self.settings, self.hard_enabled
             )
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"Marke: **{brand}**\nBitte wähle das **Modell**:",
                 view=view
             )
@@ -168,12 +170,15 @@ class ModelSelectView(discord.ui.View):
         self.add_item(select)
 
     async def model_selected(self, interaction: discord.Interaction):
+        # Sofort bestätigen bevor irgendwas geladen wird
+        await interaction.response.defer(ephemeral=True)
+
         model = interaction.data["values"][0]
         await proceed_to_car(
             interaction, self.nickname, self.track, self.version,
             self.total_laps, self.brand, model,
             self.channel, self.settings, self.hard_enabled,
-            edit=True
+            use_followup=True
         )
 
 
@@ -182,10 +187,14 @@ class ModelSelectView(discord.ui.View):
 # ─────────────────────────────────────────────
 
 async def proceed_to_car(interaction, nickname, track, version, total_laps,
-                         brand, model, channel, settings, hard_enabled, edit=True):
-    existing = get_driver_data(nickname, track, version, brand, model)
-
+                         brand, model, channel, settings, hard_enabled,
+                         use_followup=False):
+    existing    = get_driver_data(nickname, track, version, brand, model)
     car_display = f"{brand} {model}"
+
+    async def send(content=None, embed=None, view=None):
+        """Einheitliche Sendefunktion – nutzt edit_original_response nach defer."""
+        await interaction.edit_original_response(content=content, embed=embed, view=view)
 
     if existing:
         embed = discord.Embed(
@@ -200,21 +209,18 @@ async def proceed_to_car(interaction, nickname, track, version, total_laps,
         embed.add_field(name="🟡 Medium", value=seconds_to_display(float(existing["Zeit_Medium_s"])) if existing.get("Zeit_Medium_s") else "–", inline=True)
         if hard_enabled:
             embed.add_field(name="⚪ Hard", value=seconds_to_display(float(existing["Zeit_Hard_s"])) if existing.get("Zeit_Hard_s") else "–", inline=True)
-        embed.add_field(name="Medium %",          value=f"{existing.get('Medium_Pct', '–')}%",         inline=True)
+        embed.add_field(name="Medium %",         value=f"{existing.get('Medium_Pct', '–')}%",      inline=True)
         if hard_enabled:
-            embed.add_field(name="Hard %",        value=f"{existing.get('Hard_Pct', '–')}%",           inline=True)
-        embed.add_field(name="Max. Soft-Runden",  value=existing["Max_Soft_Runden"],                   inline=True)
-        embed.add_field(name="Reichweite 70%",    value=f"{existing['Reichweite_70pct']} Runden",      inline=True)
-        embed.add_field(name="Zuletzt",           value=existing.get("Letzte_Aktualisierung", "–"),    inline=True)
+            embed.add_field(name="Hard %",       value=f"{existing.get('Hard_Pct', '–')}%",        inline=True)
+        embed.add_field(name="Max. Soft-Runden", value=existing["Max_Soft_Runden"],                inline=True)
+        embed.add_field(name="Reichweite 70%",   value=f"{existing['Reichweite_70pct']} Runden",   inline=True)
+        embed.add_field(name="Zuletzt",          value=existing.get("Letzte_Aktualisierung", "–"), inline=True)
 
         view = ConfirmDataView(
             nickname, track, version, brand, model,
             total_laps, existing, settings, channel, hard_enabled
         )
-        if edit:
-            await interaction.response.edit_message(content=None, embed=embed, view=view)
-        else:
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await send(content=None, embed=embed, view=view)
 
     else:
         track_data = get_track_data(track, version)
@@ -222,7 +228,7 @@ async def proceed_to_car(interaction, nickname, track, version, total_laps,
 
         if best_lap_s:
             track_display = f"{track} – {version}" if version else track
-            msg = (
+            msg  = (
                 f"Keine gespeicherten Daten für **{track_display}** mit **{car_display}**.\n\n"
                 f"Schnellste bekannte Runde: **{seconds_to_display(best_lap_s)}** (Soft)\n\n"
                 f"Möchtest du diese Zeit als Basis verwenden?"
@@ -231,17 +237,35 @@ async def proceed_to_car(interaction, nickname, track, version, total_laps,
                 nickname, track, version, brand, model,
                 total_laps, channel, best_lap_s, settings, hard_enabled
             )
-            if edit:
-                await interaction.response.edit_message(content=msg, embed=None, view=view)
-            else:
-                await interaction.response.send_message(content=msg, view=view, ephemeral=True)
+            await send(content=msg, embed=None, view=view)
         else:
             prefill = build_prefill(0, nickname, settings, hard_enabled)
             modal   = make_modal(
                 nickname, track, version, brand, model,
                 total_laps, channel, hard_enabled, prefill=prefill
             )
-            await interaction.response.send_modal(modal)
+            # Modal kann nicht über edit_original_response gesendet werden –
+            # hier brauchen wir einen frischen Interaction-Token, daher followup + modal trick:
+            await interaction.edit_original_response(
+                content="Bitte gib deine Zeiten ein:",
+                view=OpenModalView(nickname, track, version, brand, model,
+                                   total_laps, channel, hard_enabled, prefill)
+            )
+
+
+class OpenModalView(discord.ui.View):
+    """Einzel-Button der das Modal öffnet – Workaround weil Modal nach defer nicht direkt geht."""
+    def __init__(self, nickname, track, version, brand, model, total_laps, channel, hard_enabled, prefill):
+        super().__init__(timeout=120)
+        self.d = (nickname, track, version, brand, model, total_laps, channel, hard_enabled, prefill)
+
+    @discord.ui.button(label="✏️ Zeiten eingeben", style=discord.ButtonStyle.primary)
+    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        n, tr, v, br, mo, l, ch, hard, prefill = self.d
+        await interaction.response.send_modal(
+            make_modal(n, tr, v, br, mo, l, ch, hard, prefill=prefill)
+        )
+        self.stop()
 
 
 # ─────────────────────────────────────────────
@@ -268,9 +292,5 @@ async def naechstes_rennen(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-
-# ─────────────────────────────────────────────
-# Start
-# ─────────────────────────────────────────────
 
 bot.run(TOKEN)
