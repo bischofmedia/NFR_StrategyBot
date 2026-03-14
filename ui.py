@@ -3,7 +3,7 @@ from discord.ui import Modal, TextInput, View, Button
 from strategy import calculate_strategies, format_time, TYRE_SOFT, TYRE_MEDIUM, TYRE_HARD
 from sheets import get_driver_data, save_driver_data, get_settings, get_track_data, get_driver_avg_pct
 from gemini import get_gemini_strategies, fallback_strategies
-from table import build_lap_table
+from table import build_single_column
 
 TYRE_EMOJI = {TYRE_SOFT: "🔴", TYRE_MEDIUM: "🟡", TYRE_HARD: "⚪"}
 
@@ -108,15 +108,6 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
     reasonings = gemini_result["reasonings"]
     overall    = gemini_result.get("overall", "")
 
-    table_str = build_lap_table(
-        strategies=strategies,
-        base_soft_s=soft_s, medium_plus_pct=medium_pct, hard_plus_pct=hard_pct,
-        max_soft_runden=int(str(data["max_soft_runden"]).replace(",",".").split(".")[0]),
-        fuel_per_lap=fuel_per_lap, start_fuel=start_fuel,
-        tank_size=tank_size, tank_rate_l_per_s=tank_rate,
-        pit_loss_s=pit_loss, fuel_weight_s=fw_s,
-    )
-
     track_display = f"{track} – {version}" if version else track
     ai_label = "🤖 KI-Analyse" if used_gemini else "📊 Analyse"
 
@@ -162,18 +153,22 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
     footer_suffix = "Gemini 2.5 Flash" if used_gemini else "Fallback-Algorithmus"
     embed.set_footer(text=f"NFR Strategy Bot • GT7 • {footer_suffix}")
 
-    await channel.send(embed=embed)
-
-    # Tabelle in Chunks
-    table_lines = table_str.split("\n")
-    chunk = "```\n"
-    for line in table_lines:
-        if len(chunk) + len(line) + 2 > 1950:
-            await channel.send(chunk + "```")
-            chunk = "```\n" + line + "\n"
-        else:
-            chunk += line + "\n"
-    await channel.send(chunk + "```")
+    # Detail-View: Buttons für jede Strategie
+    view = DetailSelectView(
+        strategies=strategies,
+        base_soft_s=soft_s,
+        medium_plus_pct=medium_pct,
+        hard_plus_pct=hard_pct,
+        max_soft_runden=data["max_soft_runden"] if isinstance(data["max_soft_runden"], int) else int(str(data["max_soft_runden"]).split(".")[0]),
+        fuel_per_lap=fuel_per_lap,
+        start_fuel=start_fuel,
+        tank_size=tank_size,
+        tank_rate_l_per_s=tank_rate,
+        pit_loss_s=pit_loss,
+        fuel_weight_s=fw_s,
+        channel=channel,
+    )
+    await channel.send(embed=embed, view=view)
 
 
 # ─────────────────────────────────────────────
@@ -342,3 +337,68 @@ class ConfirmDataView(View):
         prefill = build_prefill(float(ex["Zeit_Soft_s"]), n, settings, hard, existing=ex)
         await interaction.response.send_modal(make_modal(n, tr, v, br, mo, l, ch, hard, prefill=prefill))
         self.stop()
+
+
+# ─────────────────────────────────────────────
+# Detail-Ansicht: Buttons für einzelne Strategie
+# ─────────────────────────────────────────────
+
+class DetailSelectView(discord.ui.View):
+    def __init__(self, strategies, base_soft_s, medium_plus_pct, hard_plus_pct,
+                 max_soft_runden, fuel_per_lap, start_fuel, tank_size,
+                 tank_rate_l_per_s, pit_loss_s, fuel_weight_s, channel):
+        super().__init__(timeout=300)
+        self.strategies      = strategies
+        self.table_params    = dict(
+            base_soft_s=base_soft_s, medium_plus_pct=medium_plus_pct,
+            hard_plus_pct=hard_plus_pct, max_soft_runden=max_soft_runden,
+            fuel_per_lap=fuel_per_lap, start_fuel=start_fuel,
+            tank_size=tank_size, tank_rate_l_per_s=tank_rate_l_per_s,
+            pit_loss_s=pit_loss_s, fuel_weight_s=fuel_weight_s,
+        )
+        self.channel = channel
+
+        # Button pro Strategie
+        labels_short = {
+            "1-Stopp Pole":       "📋 1-Stopp Pole",
+            "2-Stopp Pole":       "📋 2-Stopp Pole",
+            "1-Stopp Nicht-Pole": "📋 1-Stopp Nicht-Pole",
+            "2-Stopp Nicht-Pole": "📋 2-Stopp Nicht-Pole",
+        }
+        styles = {
+            "1-Stopp Pole":       discord.ButtonStyle.primary,
+            "2-Stopp Pole":       discord.ButtonStyle.primary,
+            "1-Stopp Nicht-Pole": discord.ButtonStyle.secondary,
+            "2-Stopp Nicht-Pole": discord.ButtonStyle.secondary,
+        }
+        for label, result in strategies.items():
+            if result is None:
+                continue
+            btn = discord.ui.Button(
+                label=labels_short.get(label, label),
+                style=styles.get(label, discord.ButtonStyle.secondary),
+                custom_id=label,
+            )
+            btn.callback = self._make_callback(label)
+            self.add_item(btn)
+
+    def _make_callback(self, label):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            result = self.strategies.get(label)
+            if result is None:
+                await interaction.followup.send("Keine Daten.", ephemeral=True)
+                return
+            table = build_single_column(label, result, **self.table_params)
+            # In Chunks aufteilen falls nötig
+            lines = table.split("\n")
+            chunk = "```\n"
+            for line in lines:
+                if len(chunk) + len(line) + 2 > 1950:
+                    await self.channel.send(chunk + "```")
+                    chunk = "```\n" + line + "\n"
+                else:
+                    chunk += line + "\n"
+            await self.channel.send(chunk + "```")
+            await interaction.followup.send("✅ Detailansicht wurde im Channel gepostet.", ephemeral=True)
+        return callback
