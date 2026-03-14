@@ -425,4 +425,5 @@ class DetailSelectView(discord.ui.View):
                     chunk += line + "\n"
             await self.channel.send(chunk + "```")
             await interaction.followup.send("✅ Detailansicht wurde im Channel gepostet.", ephemeral=True)
+            self.stop()
         return callback

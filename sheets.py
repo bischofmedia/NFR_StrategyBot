@@ -72,7 +72,7 @@ def get_track_data(track: str, version: str) -> dict:
     try:
         sheet = get_times_sheet()
         ws = sheet.worksheet("Zeiten")
-        rows = ws.get_all_values()
+        rows = ws.get_all_values(value_render_option='UNFORMATTED_VALUE')
         track_norm   = track.strip().lower()
         version_norm = version.strip().lower() if version else ""
         for row in rows[1:]:
