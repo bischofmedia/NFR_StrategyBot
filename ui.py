@@ -41,15 +41,27 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
     verk_r       = int(settings.get("verkehr_runden", 3))
     fw_s         = float(settings.get("fuel_weight_s", 0.7))
 
-    soft_s   = data["zeit_soft_s"]
-    medium_s = data["zeit_medium_s"]
-    hard_s   = data.get("zeit_hard_s") if hard_enabled else None
+    def to_float(v):
+        """Sicher zu float konvertieren, None/leer → None."""
+        if v is None or str(v).strip() == "":
+            return None
+        return float(str(v).replace(",", "."))
+
+    soft_s   = to_float(data["zeit_soft_s"])
+    medium_s = to_float(data["zeit_medium_s"])
+    hard_s   = to_float(data.get("zeit_hard_s")) if hard_enabled else None
+
+    # Medium: Fallback auf Durchschnitt oder Settings wenn nicht vorhanden
+    if medium_s is None or medium_s <= 0:
+        avg = get_driver_avg_pct(nickname)
+        medium_pct_val = avg["medium_pct"] if avg["medium_pct"] is not None else float(settings.get("medium_default_pct", 1.0))
+        medium_s = round(soft_s * (1 + medium_pct_val / 100), 3)
 
     medium_pct = (medium_s - soft_s) / soft_s * 100
     hard_pct   = (hard_s - soft_s) / soft_s * 100 if hard_s else 0
 
     start_fuel   = tank_size * (start_pct / 100)
-    fuel_per_lap = start_fuel / data["reichweite_70pct"]
+    fuel_per_lap = start_fuel / int(str(data["reichweite_70pct"]).replace(",", ".").split(".")[0])
 
     common = dict(
         total_laps=total_laps,
@@ -57,7 +69,7 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
         medium_plus_pct=medium_pct,
         hard_plus_pct=hard_pct,
         hard_enabled=hard_enabled,
-        max_soft_runden=data["max_soft_runden"],
+        max_soft_runden=int(str(data["max_soft_runden"]).replace(",",".").split(".")[0]),
         reichweite_70pct=data["reichweite_70pct"],
         tank_size=tank_size,
         tank_rate_l_per_s=tank_rate,
@@ -81,7 +93,7 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
         track=track, version=version, car=car_display,
         total_laps=total_laps,
         base_soft_s=soft_s, medium_pct=medium_pct, hard_pct=hard_pct,
-        max_soft_runden=data["max_soft_runden"],
+        max_soft_runden=int(str(data["max_soft_runden"]).replace(",",".").split(".")[0]),
         reichweite=data["reichweite_70pct"],
         tank_size=tank_size, start_fuel_pct=start_pct,
         pit_loss=pit_loss, fuel_weight_s=fw_s,
@@ -99,7 +111,7 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
     table_str = build_lap_table(
         strategies=strategies,
         base_soft_s=soft_s, medium_plus_pct=medium_pct, hard_plus_pct=hard_pct,
-        max_soft_runden=data["max_soft_runden"],
+        max_soft_runden=int(str(data["max_soft_runden"]).replace(",",".").split(".")[0]),
         fuel_per_lap=fuel_per_lap, start_fuel=start_fuel,
         tank_size=tank_size, tank_rate_l_per_s=tank_rate,
         pit_loss_s=pit_loss, fuel_weight_s=fw_s,

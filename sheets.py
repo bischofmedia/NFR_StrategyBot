@@ -10,6 +10,49 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+
+def parse_number(val, is_small=False) -> float | None:
+    """
+    Parst Zahlen aus Google Sheets robust.
+    Behandelt deutsche Locale: "109,3" → 109.3, "1.093" → 1093.
+    is_small=True: Wert ist bekannt klein (<100), Komma ist immer Dezimaltrenner.
+    Gibt None zurück wenn nicht parsebar.
+    """
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s or s in ("-", "–"):
+        return None
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        parts = s.split(",")
+        # Tausendertrennzeichen nur wenn: 3 Stellen nach Komma UND Wert > 100
+        if (len(parts) == 2 and len(parts[1]) == 3
+                and parts[0].isdigit() and not is_small
+                and int(parts[0]) >= 1):
+            # Ambig: "1,006" könnte 1006 oder 1.006 sein
+            # Wenn Vorkommastelle = 1 Ziffer → wahrscheinlich Dezimal (z.B. Prozentwert)
+            if len(parts[0]) == 1:
+                s = s.replace(",", ".")  # Dezimaltrenner
+            else:
+                s = s.replace(",", "")   # Tausendertrenner
+        else:
+            s = s.replace(",", ".")
+    elif "." in s:
+        parts = s.split(".")
+        if (len(parts) == 2 and len(parts[1]) == 3
+                and parts[0].isdigit() and not is_small
+                and len(parts[0]) > 1):
+            s = s.replace(".", "")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
 def get_client():
     creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
     return gspread.authorize(creds)
@@ -145,6 +188,18 @@ def get_driver_data(nickname: str, track: str, version: str, brand: str, model: 
                 and row.get("Version") == version
                 and row.get("Marke")   == brand
                 and row.get("Modell")  == model):
+            # Zahlenfelder robust normalisieren
+            for field in ["Zeit_Soft_s", "Zeit_Medium_s", "Zeit_Hard_s"]:
+                if row.get(field) not in (None, "", "–", "-"):
+                    row[field] = parse_number(row[field])
+            for field in ["Medium_Pct", "Hard_Pct"]:
+                if row.get(field) not in (None, "", "–", "-"):
+                    row[field] = parse_number(row[field], is_small=True)
+            for field in ["Max_Soft_Runden", "Reichweite_70pct"]:
+                if row.get(field) not in (None, "", "–", "-"):
+                    v = parse_number(row[field])
+                    if v is not None:
+                        row[field] = int(v)
             return row
     return None
 
@@ -188,15 +243,19 @@ def save_driver_data(nickname: str, track: str, version: str, brand: str, model:
     medium_pct = round((medium_s - soft_s) / soft_s * 100, 3) if medium_s else None
     hard_pct   = round((hard_s   - soft_s) / soft_s * 100, 3) if hard_s   else None
 
+    def f3(v):
+        """Float mit exakt 3 Dezimalstellen als String mit Punkt – verhindert Locale-Komma."""
+        return f"{v:.3f}" if v is not None else ""
+
     new_row = [
         track, version, brand, model,
-        round(soft_s, 3),
-        round(medium_s, 3) if medium_s else "",
-        medium_pct if medium_pct is not None else "",
-        round(hard_s, 3)   if hard_s   else "",
-        hard_pct   if hard_pct   is not None else "",
-        data["max_soft_runden"],
-        data["reichweite_70pct"],
+        f3(soft_s),
+        f3(medium_s) if medium_s else "",
+        f3(medium_pct) if medium_pct is not None else "",
+        f3(hard_s)   if hard_s   else "",
+        f3(hard_pct) if hard_pct   is not None else "",
+        int(data["max_soft_runden"]),
+        int(data["reichweite_70pct"]),
         now
     ]
 
