@@ -200,6 +200,7 @@ def make_modal(nickname, track, version, brand, model, total_laps, channel, hard
 async def _handle_submit(interaction, nickname, track, version, brand, model,
                          total_laps, channel, raw_soft, raw_medium, raw_hard,
                          raw_max_soft, raw_reichweite):
+    # Sofort bestätigen – Google Sheets Abfragen dauern zu lang für Discord Timeout
     try:
         soft_s     = parse_time(raw_soft)
         medium_s   = parse_time(raw_medium)
@@ -212,6 +213,9 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
         )
         return
 
+    # Sofort defer – alle weiteren Operationen dauern zu lang
+    await interaction.response.defer(ephemeral=True)
+
     data = {
         "zeit_soft_s": soft_s, "zeit_medium_s": medium_s,
         "zeit_hard_s": hard_s, "max_soft_runden": max_soft,
@@ -220,7 +224,7 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
     save_driver_data(nickname, track, version, brand, model, data)
     settings = get_settings()
 
-    await interaction.response.send_message(
+    await interaction.followup.send(
         "✅ Daten gespeichert! Strategie wird berechnet...", ephemeral=True
     )
     await calculate_and_post(channel, nickname, track, version, brand, model, total_laps, data, settings)
@@ -279,6 +283,7 @@ class ConfirmDataView(View):
 
     @discord.ui.button(label="✅ Daten verwenden", style=discord.ButtonStyle.success)
     async def use_data(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)
         n, tr, v, br, mo, l, ex, settings, ch, hard = self.d
         data = {
             "zeit_soft_s":      float(ex["Zeit_Soft_s"]),
@@ -287,7 +292,7 @@ class ConfirmDataView(View):
             "max_soft_runden":  int(ex["Max_Soft_Runden"]),
             "reichweite_70pct": int(ex["Reichweite_70pct"]),
         }
-        await interaction.response.send_message("✅ Strategie wird berechnet...", ephemeral=True)
+        await interaction.followup.send("✅ Strategie wird berechnet...", ephemeral=True)
         await calculate_and_post(ch, n, tr, v, br, mo, l, data, settings)
         self.stop()
 
