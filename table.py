@@ -74,12 +74,12 @@ def build_lap_table(
                 })
 
             if si < len(result.stints) - 1:
-                next_runden = result.stints[si + 1][1]
-                fuel_needed = next_runden * fuel_per_lap
+                remaining_laps = sum(r for _, r in result.stints[si+1:])
+                fuel_needed    = remaining_laps * fuel_per_lap
                 refuel   = 0
                 pit_time = pit_loss_s
                 if fuel < fuel_needed:
-                    refuel    = min(tank_size - fuel, tank_size)
+                    refuel    = min(fuel_needed - fuel, tank_size - fuel)
                     pit_time += refuel / tank_rate_l_per_s
                     fuel     += refuel
                 rows[-1]["pit"]      = True

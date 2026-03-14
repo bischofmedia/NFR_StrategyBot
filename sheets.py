@@ -182,7 +182,7 @@ def get_driver_data(nickname: str, track: str, version: str, brand: str, model: 
     if nickname not in titles:
         return None
     ws   = sheet.worksheet(nickname)
-    rows = ws.get_all_records()
+    rows = ws.get_all_records(value_render_option='UNFORMATTED_VALUE')
     for row in rows:
         if (row.get("Strecke")  == track
                 and row.get("Version") == version
@@ -210,7 +210,7 @@ def get_driver_avg_pct(nickname: str) -> dict:
     if nickname not in titles:
         return {"medium_pct": None, "hard_pct": None}
     ws   = sheet.worksheet(nickname)
-    rows = ws.get_all_records()
+    rows = ws.get_all_records(value_render_option='UNFORMATTED_VALUE')
     medium_vals, hard_vals = [], []
     for row in rows:
         try:
@@ -233,7 +233,7 @@ def get_driver_avg_pct(nickname: str) -> dict:
 
 def save_driver_data(nickname: str, track: str, version: str, brand: str, model: str, data: dict):
     ws   = ensure_driver_sheet(nickname)
-    rows = ws.get_all_records()
+    rows = ws.get_all_records(value_render_option='UNFORMATTED_VALUE')
     now  = datetime.now().strftime("%d.%m.%Y %H:%M")
 
     soft_s   = data["zeit_soft_s"]
@@ -243,17 +243,15 @@ def save_driver_data(nickname: str, track: str, version: str, brand: str, model:
     medium_pct = round((medium_s - soft_s) / soft_s * 100, 3) if medium_s else None
     hard_pct   = round((hard_s   - soft_s) / soft_s * 100, 3) if hard_s   else None
 
-    def f3(v):
-        """Float mit exakt 3 Dezimalstellen als String mit Punkt – verhindert Locale-Komma."""
-        return f"{v:.3f}" if v is not None else ""
-
+    # Zahlen als Python-floats/ints übergeben – gspread sendet diese als
+    # echte Zahlen an die Sheets API, keine String-Konvertierung, keine Locale-Probleme
     new_row = [
         track, version, brand, model,
-        f3(soft_s),
-        f3(medium_s) if medium_s else "",
-        f3(medium_pct) if medium_pct is not None else "",
-        f3(hard_s)   if hard_s   else "",
-        f3(hard_pct) if hard_pct   is not None else "",
+        round(float(soft_s), 3),
+        round(float(medium_s), 3) if medium_s else "",
+        round(float(medium_pct), 4) if medium_pct is not None else "",
+        round(float(hard_s), 3)   if hard_s   else "",
+        round(float(hard_pct), 4) if hard_pct is not None else "",
         int(data["max_soft_runden"]),
         int(data["reichweite_70pct"]),
         now

@@ -111,14 +111,16 @@ def evaluate_stints(
 
         if i < len(stints) - 1:
             total_time += pit_loss_s
-            next_runden = stints[i + 1][1]
-            fuel_needed = next_runden * fuel_per_lap
-            if fuel_left < fuel_needed:
-                refuel = min(tank_size - fuel_left, tank_size)
+            # Tanken nur für den nächsten Stint (GT7-Verhalten)
+            # Berechne Spritbedarf aller verbleibenden Stints
+            remaining_laps = sum(r for _, r in stints[i+1:])
+            fuel_needed_total = remaining_laps * fuel_per_lap
+            if fuel_left < fuel_needed_total:
+                refuel = min(fuel_needed_total - fuel_left, tank_size - fuel_left)
                 total_time += refuel / tank_rate_l_per_s
                 fuel_left  += refuel
                 fuel_stops.append(i)
-                if fuel_left < fuel_needed - 0.01:
+                if fuel_left < fuel_needed_total - 0.01:
                     return None, None, False
 
     return total_time, fuel_stops, True
@@ -145,9 +147,21 @@ def generate_all_stints(total_laps, available_tyres, max_per_tyre, max_stops=3):
 
 
 def is_sensible(stints, max_soft_runden, fuel_per_lap, start_fuel):
+    max_medium = max_soft_runden * 2
+    max_hard   = max_soft_runden * 4
+    max_per_tyre = {TYRE_SOFT: max_soft_runden, TYRE_MEDIUM: max_medium, TYRE_HARD: max_hard}
+
+    # Gleicher Reifen in Folge ist sinnlos wenn der erste Stint
+    # deutlich kürzer als die Haltbarkeit ist (= unnötiger Stopp).
+    # Erlaubt: Soft→Soft wenn erster Stint >= 70% der Haltbarkeit
     for i in range(len(stints) - 1):
         if stints[i][0] == stints[i+1][0]:
-            return False
+            tyre   = stints[i][0]
+            max_t  = max_per_tyre[tyre]
+            # Erster Stint muss mindestens 70% der Haltbarkeit fahren
+            if stints[i][1] < int(max_t * 0.7):
+                return False
+
     if stints[0][0] != TYRE_SOFT:
         return False
     min_soft = max(1, int(max_soft_runden * 0.5))
@@ -211,10 +225,9 @@ def calculate_strategies(
         if not is_sensible(stints, max_soft_runden, fuel_per_lap, start_fuel):
             continue
 
-        tyre_totals = {}
-        for tyre, runden in stints:
-            tyre_totals[tyre] = tyre_totals.get(tyre, 0) + runden
-        sig = (len(stints), frozenset(tyre_totals.items()))
+        # Duplikat-Check: exakte Stint-Sequenz
+        # 10S+10S+10S != 13S+4S+13S – Längen müssen Teil der Signatur sein
+        sig = tuple(stints)
         if sig in seen:
             continue
         seen.add(sig)
