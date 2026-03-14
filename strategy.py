@@ -78,9 +78,6 @@ def evaluate_stints(
     fuel_stops = []
     lap_offset = 0
 
-    # Zähle Runden je Reifentyp pro Stint für korrekte Degradationsindizes
-    stint_lap_counters = {}  # (stint_idx, tyre) -> lap_in_stint
-
     for i, (tyre, runden) in enumerate(stints):
         for r in range(runden):
             if tyre == TYRE_SOFT:
@@ -93,8 +90,17 @@ def evaluate_stints(
             t += fuel_weight_delta(fuel_left, tank_size, fuel_weight_s)
             fuel_left -= fuel_per_lap
 
+            # Verkehrsaufschlag bei Nicht-Pole in den ersten Runden:
+            # Auf Medium/Hard fährt man im Verkehr nicht schneller als die Softs vor einem.
+            # Daher: Soft-Zeit + Aufschlag als Untergrenze verwenden.
             if i == 0 and not pole and (lap_offset + r) < verkehr_runden:
-                t += verkehr_aufschlag_s
+                if tyre == TYRE_SOFT:
+                    t += verkehr_aufschlag_s
+                else:
+                    # Medium/Hard: mindestens Soft-Zeit + Aufschlag
+                    soft_with_traffic = soft_times[min(r, max_soft_runden - 1)] + verkehr_aufschlag_s
+                    soft_with_traffic += fuel_weight_delta(fuel_left + fuel_per_lap, tank_size, fuel_weight_s)
+                    t = max(t, soft_with_traffic)
 
             total_time += t
 
