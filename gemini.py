@@ -61,7 +61,7 @@ def _build_prompt(
 
 Dir werden alle vorberechneten validen Rennstrategien übergeben, sortiert nach Gesamtzeit.
 Deine Aufgabe: Wähle die BESTE 1-Stopp- und 2-Stopp-Strategie für Pole und Nicht-Pole aus.
-Begründe kurz warum – berücksichtige Reifenabbau, Tankgewicht, Pitstop-Verluste und Taktik.
+Begründe kurz warum – berücksichtige Reifenabbau, Tankgewicht und Pitstop-Verluste. Hinweis: Es gibt keine Safety Cars in GT7-Rennen.
 
 WICHTIG: Wähle nur Strategien die exakt in den Listen "valid_strategies_from_pole" bzw.
 "valid_strategies_not_from_pole" enthalten sind. Erfinde keine neuen Stints.
@@ -237,7 +237,7 @@ def fallback_strategies(all_results_pole: list, all_results_no_pole: list) -> di
         )
     if strategies["2-Stopp Nicht-Pole"]:
         reasonings["2-Stopp Nicht-Pole"] = (
-            "Mehr Flexibilität bei schlechtem Startplatz – zweiter Stopp ermöglicht Undercut."
+            "Mehr Flexibilität durch zweiten Stopp – sinnvoll wenn Reifenabbau in der zweiten Hälfte stark zunimmt."
         )
 
     overall = ""
@@ -246,10 +246,10 @@ def fallback_strategies(all_results_pole: list, all_results_no_pole: list) -> di
         overall = (
             f"Die 1-Stopp-Strategie ist {fmt(diff)} schneller als 2 Stopps. "
             f"Von der Pole klar zu bevorzugen. "
-            f"Die 2-Stopp-Variante lohnt sich taktisch nur bei Safety-Car oder Undercut-Möglichkeit."
+            f"Die 2-Stopp-Variante lohnt sich nur wenn der Zeitverlust durch frischere Reifen ausgeglichen wird."
         ) if diff > 10 else (
             f"1- und 2-Stopp liegen nur {fmt(diff)} auseinander – "
-            f"bei Safety-Car kann ein zweiter Stopp taktisch entscheidend sein."
+            f"ein zweiter Stopp kann sich bei sehr langen Stints mit starkem Reifenabbau lohnen."
         )
 
     return {"strategies": strategies, "reasonings": reasonings, "overall": overall}

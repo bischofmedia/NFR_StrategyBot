@@ -158,7 +158,7 @@ def make_modal(nickname, track, version, brand, model, total_laps, channel, hard
     if hard_enabled:
         class ModalHard(Modal, title="Deine Daten eingeben"):
             zeit_soft   = TextInput(label="Rundenzeit auf Soft (m:ss.mmm)",   placeholder="z.B. 1:49.300", required=True)
-            zeit_medium = TextInput(label="Rundenzeit auf Medium (m:ss.mmm)", placeholder="z.B. 1:50.400", required=True)
+            zeit_medium = TextInput(label="Rundenzeit auf Medium (leer = Durchschnitt)", placeholder="z.B. 1:50.400 (optional)", required=False)
             zeit_hard   = TextInput(label="Rundenzeit auf Hard (m:ss.mmm)",   placeholder="z.B. 1:52.000", required=True)
             max_soft    = TextInput(label="Maximale Runden auf Soft",         placeholder="z.B. 13",       required=True)
             reichweite  = TextInput(label="Reichweite bei 70% Tank (Runden)", placeholder="z.B. 15",       required=True)
@@ -179,7 +179,7 @@ def make_modal(nickname, track, version, brand, model, total_laps, channel, hard
     else:
         class ModalNoHard(Modal, title="Deine Daten eingeben"):
             zeit_soft   = TextInput(label="Rundenzeit auf Soft (m:ss.mmm)",   placeholder="z.B. 1:49.300", required=True)
-            zeit_medium = TextInput(label="Rundenzeit auf Medium (m:ss.mmm)", placeholder="z.B. 1:50.400", required=True)
+            zeit_medium = TextInput(label="Rundenzeit auf Medium (leer = Durchschnitt)", placeholder="z.B. 1:50.400 (optional)", required=False)
             max_soft    = TextInput(label="Maximale Runden auf Soft",         placeholder="z.B. 13",       required=True)
             reichweite  = TextInput(label="Reichweite bei 70% Tank (Runden)", placeholder="z.B. 15",       required=True)
             def __init__(self):
@@ -203,8 +203,7 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
     # Sofort bestätigen – Google Sheets Abfragen dauern zu lang für Discord Timeout
     try:
         soft_s     = parse_time(raw_soft)
-        medium_s   = parse_time(raw_medium)
-        hard_s     = parse_time(raw_hard) if raw_hard else None
+        hard_s     = parse_time(raw_hard) if raw_hard and raw_hard.strip() else None
         max_soft   = int(raw_max_soft.strip())
         reichweite = int(raw_reichweite.strip())
     except ValueError:
@@ -216,13 +215,28 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
     # Sofort defer – alle weiteren Operationen dauern zu lang
     await interaction.response.defer(ephemeral=True)
 
+    settings = get_settings()
+
+    # Medium: aus Eingabe, sonst Fahrer-Durchschnitt, sonst Settings-Standard
+    if raw_medium and raw_medium.strip():
+        try:
+            medium_s = parse_time(raw_medium)
+        except ValueError:
+            medium_s = None
+    else:
+        medium_s = None
+
+    if medium_s is None:
+        avg = get_driver_avg_pct(nickname)
+        medium_pct = avg["medium_pct"] if avg["medium_pct"] is not None else float(settings.get("medium_default_pct", 1.0))
+        medium_s = round(soft_s * (1 + medium_pct / 100), 3)
+
     data = {
         "zeit_soft_s": soft_s, "zeit_medium_s": medium_s,
         "zeit_hard_s": hard_s, "max_soft_runden": max_soft,
         "reichweite_70pct": reichweite,
     }
     save_driver_data(nickname, track, version, brand, model, data)
-    settings = get_settings()
 
     await interaction.followup.send(
         "✅ Daten gespeichert! Strategie wird berechnet...", ephemeral=True
