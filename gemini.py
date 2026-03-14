@@ -129,12 +129,6 @@ def get_gemini_strategies(
     Temperature=0 für deterministische, reproduzierbare Ausgabe.
     Gibt None zurück bei Fehler oder erschöpftem Tageskontingent → Fallback greift.
     """
-    # Settings-Schalter: gemini = FALSE deaktiviert die KI-Abfrage
-    gemini_enabled = os.getenv("GEMINI_ENABLED", "TRUE").upper() != "FALSE"
-    if not gemini_enabled:
-        print("[Gemini] Deaktiviert per Settings")
-        return None
-
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
@@ -193,9 +187,11 @@ def get_gemini_strategies(
     except Exception as e:
         err = str(e).lower()
         if any(x in err for x in ["quota", "resource_exhausted", "rate", "429", "limit"]):
-            print(f"[Gemini] Tageskontingent erschöpft – Fallback aktiv")
+            print(f"[Gemini] Tageskontingent erschöpft – Fallback aktiv: {e}")
         else:
+            import traceback
             print(f"[Gemini] Fehler – Fallback aktiv: {e}")
+            traceback.print_exc()
         return None
 
 
