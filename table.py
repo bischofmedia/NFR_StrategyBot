@@ -90,7 +90,7 @@ def build_lap_table(
 
     all_data   = [get_lap_data(r) for r in results]
     total_laps = len(all_data[0])
-    col_w      = 22
+    col_w      = 28
     lap_w      = 5
 
     header1 = " " * lap_w + " │ "

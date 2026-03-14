@@ -126,13 +126,17 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
         color=0x00BFFF
     )
 
-    for label, result in strategies.items():
+    # Layout: Pole-Strategien nebeneinander, darunter Nicht-Pole nebeneinander
+    pole_labels    = ["1-Stopp Pole", "2-Stopp Pole"]
+    nopole_labels  = ["1-Stopp Nicht-Pole", "2-Stopp Nicht-Pole"]
+
+    def add_strategy_field(label, result):
         if result is None:
             embed.add_field(name=label, value="Nicht möglich", inline=True)
-            continue
-        stint_str = " → ".join(f"{TYRE_EMOJI[t]}{n}" for t, n in result.stints)
-        time_str  = seconds_to_display(result.total_time_s)
-        reasoning = reasonings.get(label, "")
+            return
+        stint_str  = " → ".join(f"{TYRE_EMOJI[t]}{n}" for t, n in result.stints)
+        time_str   = seconds_to_display(result.total_time_s)
+        reasoning  = reasonings.get(label, "")
         stops_info = ""
         if result.fuel_stops:
             stops_info = f"\n⛽ Tanken bei Stopp {', '.join(str(s+1) for s in result.fuel_stops)}"
@@ -141,6 +145,16 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
             value=f"**{time_str}**\n{stint_str}{stops_info}\n_{reasoning}_",
             inline=True
         )
+
+    # Zeile 1: Pole
+    for label in pole_labels:
+        add_strategy_field(label, strategies.get(label))
+    embed.add_field(name="​", value="​", inline=True)  # Leerzeichen für 3-Spalten-Layout
+
+    # Zeile 2: Nicht-Pole
+    for label in nopole_labels:
+        add_strategy_field(label, strategies.get(label))
+    embed.add_field(name="​", value="​", inline=True)
 
     if overall:
         embed.add_field(name=f"{ai_label} – Gesamtempfehlung", value=overall[:1024], inline=False)

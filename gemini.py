@@ -206,9 +206,12 @@ def fallback_strategies(all_results_pole: list, all_results_no_pole: list) -> di
         return next((r for r in results if r.pit_stops == stops), None)
 
     def fmt(s):
+        """Zeitdifferenz in Sekunden – bei < 60s einfach Sekunden, sonst m:ss."""
+        if s < 60:
+            return f"{s:.1f}s"
         mins = int(s // 60)
         secs = s % 60
-        return f"{mins}:{secs:05.1f}"
+        return f"{mins}:{secs:04.1f}min"
 
     strategies = {
         "1-Stopp Pole":       best_by_stops(all_results_pole,    1),
