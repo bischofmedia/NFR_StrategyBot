@@ -28,17 +28,18 @@ def apply_pct(base_s: float, pct: float) -> float:
 # Kernlogik
 # ─────────────────────────────────────────────
 
-async def calculate_and_post(channel, nickname, track, version, car, total_laps, data, settings):
-    hard_enabled  = settings.get("hard", "TRUE").upper() != "FALSE"
-    track_data    = get_track_data(track, version)
-    pit_loss      = track_data["pit_loss_s"] or float(settings.get("pit_loss_s", 25))
-    tank_size     = float(settings.get("tank_size_l", 100))
-    tank_rate     = float(settings.get("tank_rate_l_per_s", 5))
-    start_pct     = float(settings.get("start_fuel_pct", 70))
-    soft_required = settings.get("soft_stint_required", "TRUE").upper() == "TRUE"
-    verk_s        = float(settings.get("verkehr_aufschlag_s", 2.0))
-    verk_r        = int(settings.get("verkehr_runden", 3))
-    fw_s          = float(settings.get("fuel_weight_s", 0.7))
+async def calculate_and_post(channel, nickname, track, version, brand, model, total_laps, data, settings):
+    car_display  = f"{brand} {model}"
+    hard_enabled = settings.get("hard", "TRUE").upper() != "FALSE"
+    track_data   = get_track_data(track, version)
+    pit_loss     = track_data["pit_loss_s"] or float(settings.get("pit_loss_s", 25))
+    tank_size    = float(settings.get("tank_size_l", 100))
+    tank_rate    = float(settings.get("tank_rate_l_per_s", 5))
+    start_pct    = float(settings.get("start_fuel_pct", 70))
+    soft_req     = settings.get("soft_stint_required", "TRUE").upper() == "TRUE"
+    verk_s       = float(settings.get("verkehr_aufschlag_s", 2.0))
+    verk_r       = int(settings.get("verkehr_runden", 3))
+    fw_s         = float(settings.get("fuel_weight_s", 0.7))
 
     soft_s   = data["zeit_soft_s"]
     medium_s = data["zeit_medium_s"]
@@ -62,31 +63,25 @@ async def calculate_and_post(channel, nickname, track, version, car, total_laps,
         tank_rate_l_per_s=tank_rate,
         pit_loss_s=pit_loss,
         start_fuel_pct=start_pct,
-        soft_required=soft_required,
+        soft_required=soft_req,
         verkehr_aufschlag_s=verk_s,
         verkehr_runden=verk_r,
         fuel_weight_s=fw_s,
     )
 
-    # Alle validen Strategien berechnen
     all_pole    = calculate_strategies(**common, pole=True)
     all_no_pole = calculate_strategies(**common, pole=False)
 
-    # Gemini wählt die besten 4 aus (mit Fallback)
     gemini_result = get_gemini_strategies(
         all_results_pole=all_pole,
         all_results_no_pole=all_no_pole,
-        track=track, version=version, car=car,
+        track=track, version=version, car=car_display,
         total_laps=total_laps,
-        base_soft_s=soft_s,
-        medium_pct=medium_pct,
-        hard_pct=hard_pct,
+        base_soft_s=soft_s, medium_pct=medium_pct, hard_pct=hard_pct,
         max_soft_runden=data["max_soft_runden"],
         reichweite=data["reichweite_70pct"],
-        tank_size=tank_size,
-        start_fuel_pct=start_pct,
-        pit_loss=pit_loss,
-        fuel_weight_s=fw_s,
+        tank_size=tank_size, start_fuel_pct=start_pct,
+        pit_loss=pit_loss, fuel_weight_s=fw_s,
         hard_enabled=hard_enabled,
     )
 
@@ -98,28 +93,21 @@ async def calculate_and_post(channel, nickname, track, version, car, total_laps,
     reasonings = gemini_result["reasonings"]
     overall    = gemini_result.get("overall", "")
 
-    # Tabelle
     table_str = build_lap_table(
         strategies=strategies,
-        base_soft_s=soft_s,
-        medium_plus_pct=medium_pct,
-        hard_plus_pct=hard_pct,
+        base_soft_s=soft_s, medium_plus_pct=medium_pct, hard_plus_pct=hard_pct,
         max_soft_runden=data["max_soft_runden"],
-        fuel_per_lap=fuel_per_lap,
-        start_fuel=start_fuel,
-        tank_size=tank_size,
-        tank_rate_l_per_s=tank_rate,
-        pit_loss_s=pit_loss,
-        fuel_weight_s=fw_s,
+        fuel_per_lap=fuel_per_lap, start_fuel=start_fuel,
+        tank_size=tank_size, tank_rate_l_per_s=tank_rate,
+        pit_loss_s=pit_loss, fuel_weight_s=fw_s,
     )
 
-    # Haupt-Embed
     track_display = f"{track} – {version}" if version else track
     ai_label = "🤖 KI-Analyse" if used_gemini else "📊 Analyse"
 
     embed = discord.Embed(
         title=f"🏁 Strategieanalyse – {track_display}",
-        description=f"👤 **{nickname}** | 🚗 {car} | 🔄 {total_laps} Runden",
+        description=f"👤 **{nickname}** | 🚗 {car_display} | 🔄 {total_laps} Runden",
         color=0x00BFFF
     )
 
@@ -140,18 +128,14 @@ async def calculate_and_post(channel, nickname, track, version, car, total_laps,
         )
 
     if overall:
-        embed.add_field(
-            name=f"{ai_label} – Gesamtempfehlung",
-            value=overall[:1024],
-            inline=False
-        )
+        embed.add_field(name=f"{ai_label} – Gesamtempfehlung", value=overall[:1024], inline=False)
 
     footer_suffix = "Gemini 2.5 Flash" if used_gemini else "Fallback-Algorithmus"
     embed.set_footer(text=f"NFR Strategy Bot • GT7 • {footer_suffix}")
 
     await channel.send(embed=embed)
 
-    # Tabelle in separaten Nachrichten
+    # Tabelle in Chunks
     table_lines = table_str.split("\n")
     chunk = "```\n"
     for line in table_lines:
@@ -167,7 +151,7 @@ async def calculate_and_post(channel, nickname, track, version, car, total_laps,
 # Modal
 # ─────────────────────────────────────────────
 
-def make_modal(nickname, track, version, car, total_laps, channel, hard_enabled, prefill=None):
+def make_modal(nickname, track, version, brand, model, total_laps, channel, hard_enabled, prefill=None):
     if hard_enabled:
         class ModalHard(Modal, title="Deine Daten eingeben"):
             zeit_soft   = TextInput(label="Rundenzeit auf Soft (m:ss.mmm)",   placeholder="z.B. 1:49.300", required=True)
@@ -177,7 +161,7 @@ def make_modal(nickname, track, version, car, total_laps, channel, hard_enabled,
             reichweite  = TextInput(label="Reichweite bei 70% Tank (Runden)", placeholder="z.B. 15",       required=True)
             def __init__(self):
                 super().__init__()
-                self._p = (nickname, track, version, car, total_laps, channel)
+                self._p = (nickname, track, version, brand, model, total_laps, channel)
                 if prefill:
                     self.zeit_soft.default   = prefill.get("Zeit_Soft", "")
                     self.zeit_medium.default = prefill.get("Zeit_Medium", "")
@@ -197,7 +181,7 @@ def make_modal(nickname, track, version, car, total_laps, channel, hard_enabled,
             reichweite  = TextInput(label="Reichweite bei 70% Tank (Runden)", placeholder="z.B. 15",       required=True)
             def __init__(self):
                 super().__init__()
-                self._p = (nickname, track, version, car, total_laps, channel)
+                self._p = (nickname, track, version, brand, model, total_laps, channel)
                 if prefill:
                     self.zeit_soft.default   = prefill.get("Zeit_Soft", "")
                     self.zeit_medium.default = prefill.get("Zeit_Medium", "")
@@ -210,8 +194,9 @@ def make_modal(nickname, track, version, car, total_laps, channel, hard_enabled,
         return ModalNoHard()
 
 
-async def _handle_submit(interaction, nickname, track, version, car, total_laps, channel,
-                         raw_soft, raw_medium, raw_hard, raw_max_soft, raw_reichweite):
+async def _handle_submit(interaction, nickname, track, version, brand, model,
+                         total_laps, channel, raw_soft, raw_medium, raw_hard,
+                         raw_max_soft, raw_reichweite):
     try:
         soft_s     = parse_time(raw_soft)
         medium_s   = parse_time(raw_medium)
@@ -229,13 +214,13 @@ async def _handle_submit(interaction, nickname, track, version, car, total_laps,
         "zeit_hard_s": hard_s, "max_soft_runden": max_soft,
         "reichweite_70pct": reichweite,
     }
-    save_driver_data(nickname, track, version, car, data)
+    save_driver_data(nickname, track, version, brand, model, data)
     settings = get_settings()
 
     await interaction.response.send_message(
         "✅ Daten gespeichert! Strategie wird berechnet...", ephemeral=True
     )
-    await calculate_and_post(channel, nickname, track, version, car, total_laps, data, settings)
+    await calculate_and_post(channel, nickname, track, version, brand, model, total_laps, data, settings)
 
 
 def build_prefill(soft_s, nickname, settings, hard_enabled, existing=None):
@@ -266,46 +251,46 @@ def build_prefill(soft_s, nickname, settings, hard_enabled, existing=None):
 # ─────────────────────────────────────────────
 
 class SuggestLapTimeView(View):
-    def __init__(self, nickname, track, version, car, total_laps, channel, suggested_s, settings, hard_enabled):
+    def __init__(self, nickname, track, version, brand, model, total_laps, channel, suggested_s, settings, hard_enabled):
         super().__init__(timeout=120)
-        self.d = (nickname, track, version, car, total_laps, channel, suggested_s, settings, hard_enabled)
+        self.d = (nickname, track, version, brand, model, total_laps, channel, suggested_s, settings, hard_enabled)
 
     @discord.ui.button(label="✅ Vorgeschlagene Zeit verwenden", style=discord.ButtonStyle.success)
     async def use_suggestion(self, interaction: discord.Interaction, button: Button):
-        n, tr, v, c, l, ch, s_s, settings, hard = self.d
+        n, tr, v, br, mo, l, ch, s_s, settings, hard = self.d
         prefill = build_prefill(s_s, n, settings, hard)
-        await interaction.response.send_modal(make_modal(n, tr, v, c, l, ch, hard, prefill=prefill))
+        await interaction.response.send_modal(make_modal(n, tr, v, br, mo, l, ch, hard, prefill=prefill))
         self.stop()
 
     @discord.ui.button(label="✏️ Eigene Zeit eingeben", style=discord.ButtonStyle.primary)
     async def enter_own(self, interaction: discord.Interaction, button: Button):
-        n, tr, v, c, l, ch, _, _, hard = self.d
-        await interaction.response.send_modal(make_modal(n, tr, v, c, l, ch, hard))
+        n, tr, v, br, mo, l, ch, _, _, hard = self.d
+        await interaction.response.send_modal(make_modal(n, tr, v, br, mo, l, ch, hard))
         self.stop()
 
 
 class ConfirmDataView(View):
-    def __init__(self, nickname, track, version, car, total_laps, existing_data, settings, channel, hard_enabled):
+    def __init__(self, nickname, track, version, brand, model, total_laps, existing_data, settings, channel, hard_enabled):
         super().__init__(timeout=120)
-        self.d = (nickname, track, version, car, total_laps, existing_data, settings, channel, hard_enabled)
+        self.d = (nickname, track, version, brand, model, total_laps, existing_data, settings, channel, hard_enabled)
 
     @discord.ui.button(label="✅ Daten verwenden", style=discord.ButtonStyle.success)
     async def use_data(self, interaction: discord.Interaction, button: Button):
-        n, tr, v, c, l, ex, settings, ch, hard = self.d
+        n, tr, v, br, mo, l, ex, settings, ch, hard = self.d
         data = {
-            "zeit_soft_s":     float(ex["Zeit_Soft_s"]),
-            "zeit_medium_s":   float(ex["Zeit_Medium_s"]) if ex.get("Zeit_Medium_s") else None,
-            "zeit_hard_s":     float(ex["Zeit_Hard_s"])   if ex.get("Zeit_Hard_s")   else None,
-            "max_soft_runden": int(ex["Max_Soft_Runden"]),
+            "zeit_soft_s":      float(ex["Zeit_Soft_s"]),
+            "zeit_medium_s":    float(ex["Zeit_Medium_s"]) if ex.get("Zeit_Medium_s") else None,
+            "zeit_hard_s":      float(ex["Zeit_Hard_s"])   if ex.get("Zeit_Hard_s")   else None,
+            "max_soft_runden":  int(ex["Max_Soft_Runden"]),
             "reichweite_70pct": int(ex["Reichweite_70pct"]),
         }
         await interaction.response.send_message("✅ Strategie wird berechnet...", ephemeral=True)
-        await calculate_and_post(ch, n, tr, v, c, l, data, settings)
+        await calculate_and_post(ch, n, tr, v, br, mo, l, data, settings)
         self.stop()
 
     @discord.ui.button(label="✏️ Daten anpassen", style=discord.ButtonStyle.primary)
     async def edit_data(self, interaction: discord.Interaction, button: Button):
-        n, tr, v, c, l, ex, settings, ch, hard = self.d
+        n, tr, v, br, mo, l, ex, settings, ch, hard = self.d
         prefill = build_prefill(float(ex["Zeit_Soft_s"]), n, settings, hard, existing=ex)
-        await interaction.response.send_modal(make_modal(n, tr, v, c, l, ch, hard, prefill=prefill))
+        await interaction.response.send_modal(make_modal(n, tr, v, br, mo, l, ch, hard, prefill=prefill))
         self.stop()
