@@ -26,6 +26,9 @@ def build_single_column(
     tank_rate_l_per_s: float,
     pit_loss_s: float,
     fuel_weight_s: float,
+    pole: bool = True,
+    verkehr_aufschlag_s: float = 2.0,
+    verkehr_runden: int = 3,
 ) -> str:
     """Einzelne Strategie als kompakte, mobile-freundliche Tabelle."""
     base_medium  = base_soft_s * (1 + medium_plus_pct / 100)
@@ -36,7 +39,8 @@ def build_single_column(
 
     # Runden-Daten berechnen
     rows = []
-    fuel = start_fuel
+    fuel      = start_fuel
+    lap_total = 0
     for si, (tyre, runden) in enumerate(result.stints):
         for r in range(runden):
             if tyre == TYRE_SOFT:
@@ -46,16 +50,32 @@ def build_single_column(
             else:
                 base_t = base_hard
 
-            lap_t  = base_t + fuel_weight_delta(fuel, tank_size, fuel_weight_s)
-            fuel  -= fuel_per_lap
+            lap_t = base_t + fuel_weight_delta(fuel, tank_size, fuel_weight_s)
+
+            # Verkehrsmalus bei Nicht-Pole in den ersten Runden
+            traffic_note = ""
+            if si == 0 and not pole and lap_total < verkehr_runden:
+                if tyre == TYRE_SOFT:
+                    lap_t += verkehr_aufschlag_s
+                    traffic_note = f" (+{verkehr_aufschlag_s:.0f}s Verkehr)"
+                else:
+                    soft_with_traffic = soft_times[min(r, max_soft_runden-1)] + verkehr_aufschlag_s
+                    soft_with_traffic += fuel_weight_delta(fuel, tank_size, fuel_weight_s)
+                    if soft_with_traffic > lap_t:
+                        lap_t = soft_with_traffic
+                        traffic_note = f" (Verkehr, ={verkehr_aufschlag_s:.0f}s Malus)"
+
+            fuel      -= fuel_per_lap
+            lap_total += 1
 
             rows.append({
-                "tyre":     tyre,
-                "time":     lap_t,
-                "fuel":     max(fuel, 0),
-                "pit":      False,
-                "pit_time": 0,
-                "refuel":   0,
+                "tyre":         tyre,
+                "time":         lap_t,
+                "fuel":         max(fuel, 0),
+                "traffic_note": traffic_note,
+                "pit":          False,
+                "pit_time":     0,
+                "refuel":       0,
             })
 
         # Boxenstopp
@@ -89,7 +109,8 @@ def build_single_column(
         name    = TYRE_NAME[d["tyre"]][:6]
         time_s  = fmt_time(d["time"])
         fuel_s  = f"{d['fuel']:.1f}l"
-        line    = f"{lap_num:<4} {emoji}{name:<7} {time_s:<9} {fuel_s:<7}"
+        traffic = d.get("traffic_note", "")
+        line    = f"{lap_num:<4} {emoji}{name:<7} {time_s:<9} {fuel_s:<7}{traffic}"
         lines.append(line)
 
         if d["pit"]:

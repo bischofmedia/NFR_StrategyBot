@@ -154,6 +154,10 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
     embed.set_footer(text=f"NFR Strategy Bot • GT7 • {footer_suffix}")
 
     # Detail-View: Buttons für jede Strategie
+    detail_msg = (
+        "**Detailansicht:** Wähle eine Strategie für die Runde-für-Runde Aufschlüsselung, "
+        "oder klicke **Keine Anzeige** um zu beenden."
+    )
     view = DetailSelectView(
         strategies=strategies,
         base_soft_s=soft_s,
@@ -167,8 +171,11 @@ async def calculate_and_post(channel, nickname, track, version, brand, model, to
         pit_loss_s=pit_loss,
         fuel_weight_s=fw_s,
         channel=channel,
+        verkehr_aufschlag_s=verk_s,
+        verkehr_runden=verk_r,
     )
-    await channel.send(embed=embed, view=view)
+    await channel.send(embed=embed)
+    await channel.send(detail_msg, view=view)
 
 
 # ─────────────────────────────────────────────
@@ -346,15 +353,17 @@ class ConfirmDataView(View):
 class DetailSelectView(discord.ui.View):
     def __init__(self, strategies, base_soft_s, medium_plus_pct, hard_plus_pct,
                  max_soft_runden, fuel_per_lap, start_fuel, tank_size,
-                 tank_rate_l_per_s, pit_loss_s, fuel_weight_s, channel):
+                 tank_rate_l_per_s, pit_loss_s, fuel_weight_s, channel,
+                 verkehr_aufschlag_s=2.0, verkehr_runden=3):
         super().__init__(timeout=300)
-        self.strategies      = strategies
-        self.table_params    = dict(
+        self.strategies   = strategies
+        self.table_params = dict(
             base_soft_s=base_soft_s, medium_plus_pct=medium_plus_pct,
             hard_plus_pct=hard_plus_pct, max_soft_runden=max_soft_runden,
             fuel_per_lap=fuel_per_lap, start_fuel=start_fuel,
             tank_size=tank_size, tank_rate_l_per_s=tank_rate_l_per_s,
             pit_loss_s=pit_loss_s, fuel_weight_s=fuel_weight_s,
+            verkehr_aufschlag_s=verkehr_aufschlag_s, verkehr_runden=verkehr_runden,
         )
         self.channel = channel
 
@@ -382,6 +391,19 @@ class DetailSelectView(discord.ui.View):
             btn.callback = self._make_callback(label)
             self.add_item(btn)
 
+        # "Keine Anzeige" Button
+        close_btn = discord.ui.Button(
+            label="✖ Keine Anzeige",
+            style=discord.ButtonStyle.danger,
+            custom_id="close",
+        )
+        close_btn.callback = self._close
+        self.add_item(close_btn)
+
+    async def _close(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        self.stop()
+
     def _make_callback(self, label):
         async def callback(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
@@ -389,7 +411,9 @@ class DetailSelectView(discord.ui.View):
             if result is None:
                 await interaction.followup.send("Keine Daten.", ephemeral=True)
                 return
-            table = build_single_column(label, result, **self.table_params)
+            # Pole-Flag aus Label ableiten
+            pole = "Nicht-Pole" not in label
+            table = build_single_column(label, result, pole=pole, **self.table_params)
             # In Chunks aufteilen falls nötig
             lines = table.split("\n")
             chunk = "```\n"
