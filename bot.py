@@ -205,13 +205,13 @@ async def proceed_to_car(interaction, nickname, track, version, total_laps,
             ),
             color=0xFFA500
         )
-        embed.add_field(name="🔴 Soft",   value=seconds_to_display(float(existing["Zeit_Soft_s"])), inline=True)
-        embed.add_field(name="🟡 Medium", value=seconds_to_display(float(existing["Zeit_Medium_s"])) if existing.get("Zeit_Medium_s") else "–", inline=True)
+        embed.add_field(name="🔴 Soft",   value=seconds_to_display(float(str(existing["Zeit_Soft_s"]).replace(",","."))), inline=True)
+        embed.add_field(name="🟡 Medium", value=seconds_to_display(float(str(existing["Zeit_Medium_s"]).replace(",","."))) if existing.get("Zeit_Medium_s") else "–", inline=True)
         if hard_enabled:
-            embed.add_field(name="⚪ Hard", value=seconds_to_display(float(existing["Zeit_Hard_s"])) if existing.get("Zeit_Hard_s") else "–", inline=True)
-        embed.add_field(name="Medium %",         value=f"{existing.get('Medium_Pct', '–')}%",      inline=True)
+            embed.add_field(name="⚪ Hard", value=seconds_to_display(float(str(existing["Zeit_Hard_s"]).replace(",","."))) if existing.get("Zeit_Hard_s") else "–", inline=True)
+        embed.add_field(name="Medium %", value=f"{float(str(existing.get('Medium_Pct','0')).replace(',','.')):.2f}%" if existing.get('Medium_Pct') else "–", inline=True)
         if hard_enabled:
-            embed.add_field(name="Hard %",       value=f"{existing.get('Hard_Pct', '–')}%",        inline=True)
+            embed.add_field(name="Hard %", value=f"{float(str(existing.get('Hard_Pct','0')).replace(',','.')):.2f}%" if existing.get('Hard_Pct') else "–", inline=True)
         embed.add_field(name="Max. Soft-Runden", value=existing["Max_Soft_Runden"],                inline=True)
         embed.add_field(name="Reichweite 70%",   value=f"{existing['Reichweite_70pct']} Runden",   inline=True)
         embed.add_field(name="Zuletzt",          value=existing.get("Letzte_Aktualisierung", "–"), inline=True)

@@ -247,9 +247,9 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
 def build_prefill(soft_s, nickname, settings, hard_enabled, existing=None):
     if existing:
         return {
-            "Zeit_Soft":        seconds_to_display(float(existing["Zeit_Soft_s"])),
-            "Zeit_Medium":      seconds_to_display(float(existing["Zeit_Medium_s"])) if existing.get("Zeit_Medium_s") else "",
-            "Zeit_Hard":        seconds_to_display(float(existing["Zeit_Hard_s"]))   if existing.get("Zeit_Hard_s")   else "",
+            "Zeit_Soft":        seconds_to_display(float(str(existing["Zeit_Soft_s"]).replace(",","."))),
+            "Zeit_Medium":      seconds_to_display(float(str(existing["Zeit_Medium_s"]).replace(",","."))) if existing.get("Zeit_Medium_s") else "",
+            "Zeit_Hard":        seconds_to_display(float(str(existing["Zeit_Hard_s"]).replace(",",".")))   if existing.get("Zeit_Hard_s")   else "",
             "Max_Soft_Runden":  existing.get("Max_Soft_Runden", ""),
             "Reichweite_70pct": existing.get("Reichweite_70pct", ""),
         }
@@ -300,9 +300,9 @@ class ConfirmDataView(View):
         await interaction.response.defer(ephemeral=True)
         n, tr, v, br, mo, l, ex, settings, ch, hard = self.d
         data = {
-            "zeit_soft_s":      float(ex["Zeit_Soft_s"]),
-            "zeit_medium_s":    float(ex["Zeit_Medium_s"]) if ex.get("Zeit_Medium_s") else None,
-            "zeit_hard_s":      float(ex["Zeit_Hard_s"])   if ex.get("Zeit_Hard_s")   else None,
+            "zeit_soft_s":      float(str(ex["Zeit_Soft_s"]).replace(",",".")),
+            "zeit_medium_s":    float(str(ex["Zeit_Medium_s"]).replace(",",".")) if ex.get("Zeit_Medium_s") else None,
+            "zeit_hard_s":      float(str(ex["Zeit_Hard_s"]).replace(",","."))   if ex.get("Zeit_Hard_s")   else None,
             "max_soft_runden":  int(ex["Max_Soft_Runden"]),
             "reichweite_70pct": int(ex["Reichweite_70pct"]),
         }
