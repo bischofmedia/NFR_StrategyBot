@@ -50,7 +50,7 @@ def _build_prompt(
             "start_fuel_pct": start_fuel_pct,
             "start_fuel_l": round(tank_size * start_fuel_pct / 100, 1),
             "laps_on_start_fuel": reichweite,
-            "fuel_weight_effect_s": f"{fuel_weight_s}s per full tank, linear decrease to 0 at empty",
+            "fuel_weight_effect_s": f"{fuel_weight_s}s per full tank (linear to 0 at empty). IMPORTANT: Refueling only covers remaining laps needed, NOT full tank.",
             "pit_loss_s": pit_loss,
         },
         "valid_strategies_from_pole": serialize(all_results_pole),
@@ -129,6 +129,11 @@ def get_gemini_strategies(
     Temperature=0 für deterministische, reproduzierbare Ausgabe.
     Gibt None zurück bei Fehler oder erschöpftem Tageskontingent → Fallback greift.
     """
+    # Guard: keine leeren Listen übergeben
+    if not all_results_pole or not all_results_no_pole:
+        print("[Gemini] Keine validen Strategien – Fallback aktiv")
+        return None
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
@@ -202,11 +207,9 @@ def fallback_strategies(all_results_pole: list, all_results_no_pole: list) -> di
         return next((r for r in results if r.pit_stops == stops), None)
 
     def fmt(s):
-        """Zeitdifferenz in Sekunden – bei < 60s einfach Sekunden, sonst m:ss."""
         if s < 60:
             return f"{s:.1f}s"
-        mins = int(s // 60)
-        secs = s % 60
+        mins = int(s // 60); secs = s % 60
         return f"{mins}:{secs:04.1f}min"
 
     strategies = {
@@ -217,38 +220,44 @@ def fallback_strategies(all_results_pole: list, all_results_no_pole: list) -> di
     }
 
     reasonings = {}
-    s1p = strategies["1-Stopp Pole"]
-    s2p = strategies["2-Stopp Pole"]
+    s1p = strategies.get("1-Stopp Pole")
+    s2p = strategies.get("2-Stopp Pole")
+    s1n = strategies.get("1-Stopp Nicht-Pole")
+    s2n = strategies.get("2-Stopp Nicht-Pole")
+
+    # Vergleich 1-Stopp vs 2-Stopp immer einbauen
+    diff_1v2 = fmt(abs(s1p.total_time_s - s2p.total_time_s)) if s1p and s2p else None
+    faster   = ("1-Stopp" if s1p.total_time_s <= s2p.total_time_s else "2-Stopp") if s1p and s2p else None
 
     if s1p:
-        soft_r = sum(n for t, n in s1p.stints if t == TYRE_SOFT)
-        reasonings["1-Stopp Pole"] = (
-            f"Minimaler Pitstop-Verlust. {soft_r} Soft-Runden nutzen das Plateau optimal."
-        )
-    if strategies["1-Stopp Nicht-Pole"]:
-        reasonings["1-Stopp Nicht-Pole"] = (
-            "Gleiche Strategie wie von der Pole – Verkehr in den ersten Runden kostet etwas Zeit."
-        )
-    if s2p and s1p:
-        diff = s2p.total_time_s - s1p.total_time_s
-        reasonings["2-Stopp Pole"] = (
-            f"Frischere Reifen in der zweiten Hälfte, aber {fmt(diff)} langsamer als 1-Stopp."
-        )
-    if strategies["2-Stopp Nicht-Pole"]:
-        reasonings["2-Stopp Nicht-Pole"] = (
-            "Mehr Flexibilität durch zweiten Stopp – sinnvoll wenn Reifenabbau in der zweiten Hälfte stark zunimmt."
-        )
+        soft_r   = sum(n for t, n in s1p.stints if t == TYRE_SOFT)
+        diff_str = f" – {diff_1v2} schneller als 2-Stopp" if diff_1v2 and faster == "1-Stopp" else                    f" – {diff_1v2} langsamer als 2-Stopp" if diff_1v2 else ""
+        reasonings["1-Stopp Pole"] = f"Minimaler Boxenstopp-Verlust, {soft_r} Soft-Runden{diff_str}."
+
+    if s2p:
+        diff_str = f" – {diff_1v2} schneller als 1-Stopp" if diff_1v2 and faster == "2-Stopp" else                    f" – {diff_1v2} langsamer als 1-Stopp" if diff_1v2 else ""
+        reasonings["2-Stopp Pole"] = f"Frischere Reifen durch zweiten Stopp{diff_str}."
+
+    if s1n:
+        reasonings["1-Stopp Nicht-Pole"] = "Verkehrsmalus R1+2s/R2+1.5s/R3+1s kostet etwas Zeit gegenüber Pole."
+
+    if s2n:
+        diff_str = f" – {fmt(abs(s2n.total_time_s - s1n.total_time_s))} langsamer als 1-Stopp" if s1n else ""
+        reasonings["2-Stopp Nicht-Pole"] = f"Zwei Stopps bei Nicht-Pole-Start{diff_str}."
 
     overall = ""
     if s1p and s2p:
-        diff = s2p.total_time_s - s1p.total_time_s
+        diff = abs(s1p.total_time_s - s2p.total_time_s)
         overall = (
-            f"Die 1-Stopp-Strategie ist {fmt(diff)} schneller als 2 Stopps. "
-            f"Von der Pole klar zu bevorzugen. "
-            f"Die 2-Stopp-Variante lohnt sich nur wenn der Zeitverlust durch frischere Reifen ausgeglichen wird."
-        ) if diff > 10 else (
-            f"1- und 2-Stopp liegen nur {fmt(diff)} auseinander – "
-            f"ein zweiter Stopp kann sich bei sehr langen Stints mit starkem Reifenabbau lohnen."
+            f"**{faster}** ist {fmt(diff)} schneller. "
+            + ("Der Pitstop-Verlust überwiegt den Vorteil frischer Reifen."
+               if faster == "1-Stopp"
+               else "Frische Reifen im zweiten Stint gleichen den Pitstop-Verlust mehr als aus.")
         )
+    elif s1p:
+        overall = "Nur 1-Stopp-Strategie verfügbar."
+    elif s2p:
+        overall = "Nur 2-Stopp-Strategie verfügbar."
 
     return {"strategies": strategies, "reasonings": reasonings, "overall": overall}
+

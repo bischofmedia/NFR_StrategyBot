@@ -52,18 +52,21 @@ def build_single_column(
 
             lap_t = base_t + fuel_weight_delta(fuel, tank_size, fuel_weight_s)
 
-            # Verkehrsmalus bei Nicht-Pole in den ersten Runden
+            # Verkehrsmalus bei Nicht-Pole: R1+2s, R2+1.5s, R3+1s
+            from strategy import VERKEHR_MALUS
             traffic_note = ""
-            if si == 0 and not pole and lap_total < verkehr_runden:
-                if tyre == TYRE_SOFT:
-                    lap_t += verkehr_aufschlag_s
-                    traffic_note = f" (+{verkehr_aufschlag_s:.0f}s Verkehr)"
-                else:
-                    soft_with_traffic = soft_times[min(r, max_soft_runden-1)] + verkehr_aufschlag_s
-                    soft_with_traffic += fuel_weight_delta(fuel, tank_size, fuel_weight_s)
-                    if soft_with_traffic > lap_t:
-                        lap_t = soft_with_traffic
-                        traffic_note = f" (Verkehr, ={verkehr_aufschlag_s:.0f}s Malus)"
+            if si == 0 and not pole:
+                malus = VERKEHR_MALUS.get(lap_total, 0.0)
+                if malus > 0:
+                    if tyre == TYRE_SOFT:
+                        lap_t += malus
+                        traffic_note = f" (+{malus:.1f}s Verkehr)"
+                    else:
+                        soft_t = soft_times[min(r, max_soft_runden-1)]
+                        soft_t += fuel_weight_delta(fuel, tank_size, fuel_weight_s) + malus
+                        if soft_t > lap_t:
+                            lap_t = soft_t
+                            traffic_note = f" (Verkehr +{malus:.1f}s)"
 
             fuel      -= fuel_per_lap
             lap_total += 1

@@ -1,6 +1,8 @@
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+BERLIN = timezone(timedelta(hours=1))  # CET; MEZ/MESZ wird automatisch durch Systemzeit
 import os
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -234,7 +236,7 @@ def get_driver_avg_pct(nickname: str) -> dict:
 def save_driver_data(nickname: str, track: str, version: str, brand: str, model: str, data: dict):
     ws   = ensure_driver_sheet(nickname)
     rows = ws.get_all_records(value_render_option='UNFORMATTED_VALUE')
-    now  = datetime.now().strftime("%d.%m.%Y %H:%M")
+    now  = datetime.now(BERLIN).strftime("%d.%m.%Y %H:%M")
 
     soft_s   = data["zeit_soft_s"]
     medium_s = data["zeit_medium_s"]

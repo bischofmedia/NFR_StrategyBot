@@ -425,5 +425,12 @@ class DetailSelectView(discord.ui.View):
                     chunk += line + "\n"
             await self.channel.send(chunk + "```")
             await interaction.followup.send("✅ Detailansicht wurde im Channel gepostet.", ephemeral=True)
+            # Buttons erneut anzeigen für weitere Detailabfragen
+            new_view = DetailSelectView(
+                strategies=self.strategies,
+                channel=self.channel,
+                **self.table_params,
+            )
+            await self.channel.send("Weitere Detailansicht:", view=new_view)
             self.stop()
         return callback

@@ -1,8 +1,12 @@
 from dataclasses import dataclass
+from datetime import timezone, timedelta
 
 TYRE_SOFT   = "Soft"
 TYRE_MEDIUM = "Medium"
 TYRE_HARD   = "Hard"
+
+# Verkehrsmalus pro Runde bei Nicht-Pole
+VERKEHR_MALUS = {0: 2.0, 1: 1.5, 2: 1.0}  # Runde 1,2,3 (0-indexed)
 
 
 @dataclass
@@ -16,13 +20,6 @@ class StrategyResult:
 
 
 def soft_lap_times(base_time_s: float, max_runden: int) -> list[float]:
-    """
-    Degradationskurve Soft:
-    Runde 1: +0.5s (kalt)
-    Runden 2–40%: Plateau (0s)
-    40–70%: +0 bis +1.0s
-    70–100%: +1.0 bis +3.0s
-    """
     times = []
     for i in range(1, max_runden + 1):
         progress = i / max_runden
@@ -39,13 +36,6 @@ def soft_lap_times(base_time_s: float, max_runden: int) -> list[float]:
 
 
 def medium_lap_times(base_time_s: float, max_runden: int) -> list[float]:
-    """
-    Degradationskurve Medium: gleiche Kurvenform wie Soft, gestreckt auf max_runden.
-    Runde 1: +0.5s (kalt)
-    Runden 2–40%: Plateau
-    40–70%: +0 bis +1.0s
-    70–100%: +1.0 bis +3.0s
-    """
     times = []
     for i in range(1, max_runden + 1):
         progress = i / max_runden
@@ -62,21 +52,25 @@ def medium_lap_times(base_time_s: float, max_runden: int) -> list[float]:
 
 
 def fuel_weight_delta(fuel_left: float, tank_size: float, fuel_weight_s: float) -> float:
-    """Zeitaufschlag durch Tankgewicht. Linear: voller Tank = +fuel_weight_s, leer = 0."""
     return (fuel_left / tank_size) * fuel_weight_s
+
+
+def get_verkehr_malus(lap_index: int) -> float:
+    """Verkehrsmalus für Runde lap_index (0-basiert): R1=+2s, R2=+1.5s, R3=+1s"""
+    return VERKEHR_MALUS.get(lap_index, 0.0)
 
 
 def evaluate_stints(
     stints, soft_times, medium_times, base_time_hard_s,
     max_soft_runden, max_medium_runden,
     fuel_per_lap, start_fuel, tank_size,
-    tank_rate_l_per_s, pit_loss_s, pole, verkehr_aufschlag_s, verkehr_runden,
+    tank_rate_l_per_s, pit_loss_s, pole,
     fuel_weight_s
 ):
     total_time = 0.0
     fuel_left  = start_fuel
     fuel_stops = []
-    lap_offset = 0
+    lap_total  = 0
 
     for i, (tyre, runden) in enumerate(stints):
         for r in range(runden):
@@ -90,37 +84,36 @@ def evaluate_stints(
             t += fuel_weight_delta(fuel_left, tank_size, fuel_weight_s)
             fuel_left -= fuel_per_lap
 
-            # Verkehrsaufschlag bei Nicht-Pole in den ersten Runden:
-            # Auf Medium/Hard fährt man im Verkehr nicht schneller als die Softs vor einem.
-            # Daher: Soft-Zeit + Aufschlag als Untergrenze verwenden.
-            if i == 0 and not pole and (lap_offset + r) < verkehr_runden:
-                if tyre == TYRE_SOFT:
-                    t += verkehr_aufschlag_s
-                else:
-                    # Medium/Hard: mindestens Soft-Zeit + Aufschlag
-                    soft_with_traffic = soft_times[min(r, max_soft_runden - 1)] + verkehr_aufschlag_s
-                    soft_with_traffic += fuel_weight_delta(fuel_left + fuel_per_lap, tank_size, fuel_weight_s)
-                    t = max(t, soft_with_traffic)
+            # Verkehrsmalus bei Nicht-Pole
+            if i == 0 and not pole:
+                malus = get_verkehr_malus(lap_total)
+                if malus > 0:
+                    if tyre == TYRE_SOFT:
+                        t += malus
+                    else:
+                        # Medium/Hard: mindestens Soft-Zeit + Malus
+                        soft_t = soft_times[min(r, max_soft_runden - 1)]
+                        soft_t += fuel_weight_delta(fuel_left + fuel_per_lap, tank_size, fuel_weight_s)
+                        soft_t += malus
+                        t = max(t, soft_t)
 
             total_time += t
+            lap_total  += 1
 
         if fuel_left < -0.01:
             return None, None, False
 
-        lap_offset += runden
-
         if i < len(stints) - 1:
             total_time += pit_loss_s
-            # Tanken nur für den nächsten Stint (GT7-Verhalten)
-            # Berechne Spritbedarf aller verbleibenden Stints
-            remaining_laps = sum(r for _, r in stints[i+1:])
-            fuel_needed_total = remaining_laps * fuel_per_lap
-            if fuel_left < fuel_needed_total:
-                refuel = min(fuel_needed_total - fuel_left, tank_size - fuel_left)
+            # Tanken nur für verbleibende Stints (GT7-Verhalten)
+            remaining_laps = sum(n for _, n in stints[i+1:])
+            fuel_needed    = remaining_laps * fuel_per_lap
+            if fuel_left < fuel_needed:
+                refuel = min(fuel_needed - fuel_left, tank_size - fuel_left)
                 total_time += refuel / tank_rate_l_per_s
                 fuel_left  += refuel
                 fuel_stops.append(i)
-                if fuel_left < fuel_needed_total - 0.01:
+                if fuel_left < fuel_needed - 0.01:
                     return None, None, False
 
     return total_time, fuel_stops, True
@@ -147,29 +140,28 @@ def generate_all_stints(total_laps, available_tyres, max_per_tyre, max_stops=3):
 
 
 def is_sensible(stints, max_soft_runden, fuel_per_lap, start_fuel):
-    max_medium = max_soft_runden * 2
-    max_hard   = max_soft_runden * 4
+    max_medium   = max_soft_runden * 2
+    max_hard     = max_soft_runden * 4
     max_per_tyre = {TYRE_SOFT: max_soft_runden, TYRE_MEDIUM: max_medium, TYRE_HARD: max_hard}
 
-    # Gleicher Reifen in Folge ist sinnlos wenn der erste Stint
-    # deutlich kürzer als die Haltbarkeit ist (= unnötiger Stopp).
-    # Erlaubt: Soft→Soft wenn erster Stint >= 70% der Haltbarkeit
     for i in range(len(stints) - 1):
         if stints[i][0] == stints[i+1][0]:
-            tyre   = stints[i][0]
-            max_t  = max_per_tyre[tyre]
-            # Erster Stint muss mindestens 70% der Haltbarkeit fahren
+            tyre  = stints[i][0]
+            max_t = max_per_tyre[tyre]
             if stints[i][1] < int(max_t * 0.7):
                 return False
 
     if stints[0][0] != TYRE_SOFT:
         return False
+
     min_soft = max(1, int(max_soft_runden * 0.5))
     for tyre, runden in stints:
         if tyre == TYRE_SOFT and runden < min_soft:
             return False
+
     if stints[0][1] * fuel_per_lap > start_fuel:
         return False
+
     return True
 
 
@@ -187,7 +179,7 @@ def calculate_strategies(
     soft_required: bool,
     pole: bool,
     hard_enabled: bool = True,
-    verkehr_aufschlag_s: float = 2.0,
+    verkehr_aufschlag_s: float = 2.0,  # wird nicht mehr verwendet, VERKEHR_MALUS gilt
     verkehr_runden: int = 3,
     fuel_weight_s: float = 0.7,
 ) -> list[StrategyResult]:
@@ -201,7 +193,7 @@ def calculate_strategies(
     start_fuel   = tank_size * (start_fuel_pct / 100)
     fuel_per_lap = start_fuel / reichweite_70pct
 
-    soft_times   = soft_lap_times(base_time_soft_s,   max_soft_runden)
+    soft_times   = soft_lap_times(base_time_soft_s,    max_soft_runden)
     medium_times = medium_lap_times(base_time_medium_s, max_medium)
 
     available_tyres = [TYRE_SOFT, TYRE_MEDIUM]
@@ -217,7 +209,7 @@ def calculate_strategies(
     all_stints = generate_all_stints(total_laps, available_tyres, max_per_tyre)
 
     results = []
-    seen = set()
+    seen    = set()
 
     for stints in all_stints:
         if soft_required and not any(t == TYRE_SOFT for t, _ in stints):
@@ -225,8 +217,6 @@ def calculate_strategies(
         if not is_sensible(stints, max_soft_runden, fuel_per_lap, start_fuel):
             continue
 
-        # Duplikat-Check: exakte Stint-Sequenz
-        # 10S+10S+10S != 13S+4S+13S – Längen müssen Teil der Signatur sein
         sig = tuple(stints)
         if sig in seen:
             continue
@@ -236,8 +226,8 @@ def calculate_strategies(
             stints, soft_times, medium_times, base_time_hard_s,
             max_soft_runden, max_medium,
             fuel_per_lap, start_fuel, tank_size,
-            tank_rate_l_per_s, pit_loss_s, pole, verkehr_aufschlag_s,
-            verkehr_runden, fuel_weight_s
+            tank_rate_l_per_s, pit_loss_s, pole,
+            fuel_weight_s
         )
 
         if not valid:
@@ -254,7 +244,7 @@ def calculate_strategies(
         ))
 
     results.sort(key=lambda r: r.total_time_s)
-    return results[:10]
+    return results[:15]  # Top-15 für Gemini
 
 
 def format_time(seconds: float) -> str:
