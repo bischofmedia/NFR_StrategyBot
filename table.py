@@ -83,8 +83,8 @@ def build_single_column(
 
         # Boxenstopp
         if si < len(result.stints) - 1:
-            remaining_laps = sum(n for _, n in result.stints[si+1:])
-            fuel_needed    = remaining_laps * fuel_per_lap
+            next_runden = result.stints[si+1][1]
+            fuel_needed = next_runden * fuel_per_lap
             refuel   = 0
             pit_time = pit_loss_s
             if fuel < fuel_needed:

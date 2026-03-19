@@ -105,9 +105,9 @@ def evaluate_stints(
 
         if i < len(stints) - 1:
             total_time += pit_loss_s
-            # Tanken nur für verbleibende Stints (GT7-Verhalten)
-            remaining_laps = sum(n for _, n in stints[i+1:])
-            fuel_needed    = remaining_laps * fuel_per_lap
+            # Tanken nur für den nächsten Stint (GT7-Verhalten)
+            next_runden = stints[i+1][1]
+            fuel_needed = next_runden * fuel_per_lap
             if fuel_left < fuel_needed:
                 refuel = min(fuel_needed - fuel_left, tank_size - fuel_left)
                 total_time += refuel / tank_rate_l_per_s
