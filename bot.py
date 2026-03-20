@@ -141,6 +141,11 @@ class BrandSelectView(discord.ui.View):
         models = self.brands_models.get(brand, [])
 
         if len(models) == 1:
+            await interaction.edit_original_response(
+                content=f"Marke: **{brand}** | Modell: **{models[0]}**
+Lade Daten...",
+                view=None
+            )
             await proceed_to_car(
                 interaction, self.nickname, self.track, self.version,
                 self.total_laps, brand, models[0],
@@ -253,7 +258,8 @@ async def proceed_to_car(interaction, nickname, track, version, total_laps,
             )
             await send(content=msg, embed=None, view=view)
         else:
-            prefill = build_prefill(0, nickname, settings, league=league)
+            hard_allowed = settings.get("hard_tyre_allowed", "FALSE").upper() == "TRUE"
+            prefill = build_prefill(0, nickname, settings, hard_allowed, league=league)
             modal   = make_modal(
                 nickname, track, version, brand, model,
                 total_laps, channel, league, prefill=prefill
