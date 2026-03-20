@@ -72,7 +72,6 @@ async def strategie(interaction: discord.Interaction,
     ensure_driver_sheet(nickname, league)
 
     settings     = get_settings(league)
-    hard_enabled = settings.get("hard_tyre_allowed", "FALSE").upper() == "TRUE"
 
     race = get_next_race(league)
     if not race:
@@ -103,7 +102,7 @@ async def strategie(interaction: discord.Interaction,
     league_display = LEAGUE_NAMES.get(league, league.upper())
     view = BrandSelectView(
         nickname, track, version, total_laps,
-        brands_models, channel, settings, hard_enabled, league
+        brands_models, channel, settings, league
     )
     await interaction.followup.send(
         f"🏁 **{league_display}** | {track_display} ({total_laps} Runden)\n"
@@ -119,7 +118,7 @@ async def strategie(interaction: discord.Interaction,
 
 class BrandSelectView(discord.ui.View):
     def __init__(self, nickname, track, version, total_laps,
-                 brands_models, channel, settings, hard_enabled, league):
+                 brands_models, channel, settings, league):
         super().__init__(timeout=120)
         self.nickname      = nickname
         self.track         = track
@@ -128,7 +127,6 @@ class BrandSelectView(discord.ui.View):
         self.brands_models = brands_models
         self.channel       = channel
         self.settings      = settings
-        self.hard_enabled  = hard_enabled
         self.league        = league
 
         brands  = sorted(brands_models.keys())[:25]
@@ -146,12 +144,12 @@ class BrandSelectView(discord.ui.View):
             await proceed_to_car(
                 interaction, self.nickname, self.track, self.version,
                 self.total_laps, brand, models[0],
-                self.channel, self.settings, self.hard_enabled, self.league
+                self.channel, self.settings, self.league
             )
         else:
             view = ModelSelectView(
                 self.nickname, self.track, self.version, self.total_laps,
-                brand, models, self.channel, self.settings, self.hard_enabled, self.league
+                brand, models, self.channel, self.settings, self.league
             )
             await interaction.edit_original_response(
                 content=f"Marke: **{brand}**\nBitte wähle das **Modell**:",
@@ -165,7 +163,7 @@ class BrandSelectView(discord.ui.View):
 
 class ModelSelectView(discord.ui.View):
     def __init__(self, nickname, track, version, total_laps,
-                 brand, models, channel, settings, hard_enabled, league):
+                 brand, models, channel, settings, league):
         super().__init__(timeout=120)
         self.nickname     = nickname
         self.track        = track
@@ -188,7 +186,7 @@ class ModelSelectView(discord.ui.View):
         await proceed_to_car(
             interaction, self.nickname, self.track, self.version,
             self.total_laps, self.brand, model,
-            self.channel, self.settings, self.hard_enabled, self.league
+            self.channel, self.settings, self.league
         )
 
 
@@ -197,7 +195,7 @@ class ModelSelectView(discord.ui.View):
 # ─────────────────────────────────────────────
 
 async def proceed_to_car(interaction, nickname, track, version, total_laps,
-                         brand, model, channel, settings, hard_enabled, league):
+                         brand, model, channel, settings, league):
     existing    = get_driver_data(nickname, track, version, brand, model, league)
     car_display = f"{brand} {model}"
 
@@ -234,7 +232,7 @@ async def proceed_to_car(interaction, nickname, track, version, total_laps,
 
         view = ConfirmDataView(
             nickname, track, version, brand, model,
-            total_laps, existing, settings, channel, hard_enabled, league
+            total_laps, existing, settings, channel, league
         )
         await send(content=None, embed=embed, view=view)
 
@@ -251,28 +249,28 @@ async def proceed_to_car(interaction, nickname, track, version, total_laps,
             )
             view = SuggestLapTimeView(
                 nickname, track, version, brand, model,
-                total_laps, channel, best_lap_s, settings, hard_enabled, league
+                total_laps, channel, best_lap_s, settings, league
             )
             await send(content=msg, embed=None, view=view)
         else:
-            prefill = build_prefill(0, nickname, settings, hard_enabled, league=league)
+            prefill = build_prefill(0, nickname, settings, league=league)
             modal   = make_modal(
                 nickname, track, version, brand, model,
-                total_laps, channel, hard_enabled, league, prefill=prefill
+                total_laps, channel, league, prefill=prefill
             )
             await interaction.edit_original_response(
                 content="Bitte gib deine Zeiten ein:",
                 view=OpenModalView(nickname, track, version, brand, model,
-                                   total_laps, channel, hard_enabled, league, prefill)
+                                   total_laps, channel, league, prefill)
             )
 
 
 class OpenModalView(discord.ui.View):
     def __init__(self, nickname, track, version, brand, model,
-                 total_laps, channel, hard_enabled, league, prefill):
+                 total_laps, channel, league, prefill):
         super().__init__(timeout=120)
         self.d = (nickname, track, version, brand, model,
-                  total_laps, channel, hard_enabled, league, prefill)
+                  total_laps, channel, league, prefill)
 
     @discord.ui.button(label="✏️ Zeiten eingeben", style=discord.ButtonStyle.primary)
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):

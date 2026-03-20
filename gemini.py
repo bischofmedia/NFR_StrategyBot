@@ -12,7 +12,6 @@ def _build_prompt(
     base_soft_s: float, medium_pct: float, hard_pct: float,
     max_soft_runden: int, reichweite: int, tank_size: float,
     start_fuel_pct: float, pit_loss: float, fuel_weight_s: float,
-    hard_enabled: bool,
 ) -> str:
 
     def fmt(s):
@@ -122,7 +121,6 @@ def get_gemini_strategies(
     base_soft_s: float, medium_pct: float, hard_pct: float,
     max_soft_runden: int, reichweite: int, tank_size: float,
     start_fuel_pct: float, pit_loss: float, fuel_weight_s: float,
-    hard_enabled: bool,
 ) -> dict | None:
     """
     Lässt Gemini 2.5 Flash die besten 4 Strategien auswählen und begründen.

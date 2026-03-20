@@ -238,7 +238,6 @@ def calculate_strategies(
     start_fuel_pct: float,
     soft_required: bool,
     pole: bool,
-    hard_enabled: bool = True,
     verkehr_aufschlag_s: float = 2.0,  # Legacy
     verkehr_runden: int = 3,           # Legacy
     fuel_weight_s: float = 0.7,
@@ -277,7 +276,7 @@ def calculate_strategies(
     available = []
     if soft_allowed:   available.append(TYRE_SOFT)
     if medium_allowed: available.append(TYRE_MEDIUM)
-    if hard_allowed and hard_enabled: available.append(TYRE_HARD)
+    if hard_allowed: available.append(TYRE_HARD)
 
     if not available:
         return []
@@ -286,7 +285,7 @@ def calculate_strategies(
     required = []
     if soft_required   and soft_allowed:                     required.append(TYRE_SOFT)
     if medium_required and medium_allowed:                   required.append(TYRE_MEDIUM)
-    if hard_required   and hard_allowed and hard_enabled:    required.append(TYRE_HARD)
+    if hard_required   and hard_allowed:    required.append(TYRE_HARD)
 
     # Minimale Stint-Länge pro Reifen (als Anteil der max Haltbarkeit)
     # Soft: mind. 50% um Plateau zu nutzen; Medium/Hard: mind. 1 Runde

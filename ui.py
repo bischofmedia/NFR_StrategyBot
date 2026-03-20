@@ -46,7 +46,6 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
     def f(key, default): return float(s(key, default))
     def i_(key, default): return int(float(s(key, default)))
 
-    hard_enabled     = b("hard_tyre_allowed",    False)
     soft_allowed     = b("soft_tyre_allowed",     True)
     medium_allowed   = b("medium_tyre_allowed",   True)
     hard_allowed     = b("hard_tyre_allowed",     False)
@@ -66,12 +65,17 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
 
     soft_s   = to_float(data["zeit_soft_s"])
     medium_s = to_float(data["zeit_medium_s"])
-    hard_s   = to_float(data.get("zeit_hard_s")) if hard_enabled else None
+    hard_s   = to_float(data.get("zeit_hard_s")) if hard_allowed else None
+
+    avg = get_driver_avg_pct(nickname, league)
 
     if medium_s is None or medium_s <= 0:
-        avg = get_driver_avg_pct(nickname, league)
         med_pct_val = avg["medium_pct"] if avg["medium_pct"] is not None else f("medium_default_pct", 1.0)
         medium_s = round(soft_s * (1 + med_pct_val / 100), 3)
+
+    if hard_allowed and (hard_s is None or hard_s <= 0):
+        hard_pct_val = avg["hard_pct"] if avg["hard_pct"] is not None else f("hard_default_pct", 2.5)
+        hard_s = round(soft_s * (1 + hard_pct_val / 100), 3)
 
     medium_pct = (medium_s - soft_s) / soft_s * 100
     hard_pct   = (hard_s - soft_s)   / soft_s * 100 if hard_s else 0
@@ -92,7 +96,6 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
         pit_loss_s=pit_loss,
         start_fuel_pct=start_pct,
         soft_required=soft_required,
-        hard_enabled=hard_enabled,
         fuel_weight_s=fw_s,
         medium_required=medium_required,
         hard_required=hard_required,
@@ -119,7 +122,6 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
             reichweite=int(str(data["reichweite_70pct"]).replace(",",".").split(".")[0]),
             tank_size=tank_size, start_fuel_pct=start_pct,
             pit_loss=pit_loss, fuel_weight_s=fw_s,
-            hard_enabled=hard_enabled,
         )
 
     used_gemini = gemini_result is not None
