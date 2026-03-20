@@ -6,7 +6,8 @@ import os
 
 from sheets import (
     get_next_race, get_driver_data, ensure_driver_sheet,
-    get_settings, get_brands_and_models, get_track_data
+    get_settings, get_brands_and_models, get_track_data,
+    VALID_LEAGUES, DEFAULT_LEAGUE, normalise_league
 )
 from ui import ConfirmDataView, make_modal, SuggestLapTimeView, seconds_to_display, build_prefill
 
@@ -21,6 +22,8 @@ intents.message_content = True
 
 bot  = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
+
+LEAGUE_NAMES = {"rtc": "RTC", "awl": "AWL", "gtfun": "GTFUN"}
 
 
 @bot.event
@@ -51,22 +54,30 @@ def check_channel():
 # /strategie
 # ─────────────────────────────────────────────
 
-@tree.command(name="strategie", description="Berechne deine optimale Rennstrategie für das nächste Rennen")
+@tree.command(name="strategie", description="Berechne deine optimale Rennstrategie")
+@app_commands.describe(liga="Liga auswählen (Standard: RTC)")
+@app_commands.choices(liga=[
+    app_commands.Choice(name="RTC",   value="rtc"),
+    app_commands.Choice(name="AWL",   value="awl"),
+    app_commands.Choice(name="GTFUN", value="gtfun"),
+])
 @check_channel()
-async def strategie(interaction: discord.Interaction):
+async def strategie(interaction: discord.Interaction,
+                    liga: app_commands.Choice[str] = None):
     await interaction.response.defer(thinking=True, ephemeral=True)
 
+    league   = normalise_league(liga.value if liga else DEFAULT_LEAGUE)
     nickname = interaction.user.display_name
     channel  = interaction.channel
-    ensure_driver_sheet(nickname)
+    ensure_driver_sheet(nickname, league)
 
-    settings     = get_settings()
-    hard_enabled = settings.get("hard", "TRUE").upper() != "FALSE"
+    settings     = get_settings(league)
+    hard_enabled = settings.get("hard_tyre_allowed", "FALSE").upper() == "TRUE"
 
-    race = get_next_race()
+    race = get_next_race(league)
     if not race:
         await interaction.followup.send(
-            "Kein nächstes Rennen im Kalender gefunden. Bitte den Admin kontaktieren.",
+            f"Kein nächstes Rennen im {LEAGUE_NAMES.get(league, league)}-Kalender gefunden.",
             ephemeral=True
         )
         return
@@ -88,13 +99,14 @@ async def strategie(interaction: discord.Interaction):
         )
         return
 
-    track_display = f"{track} – {version}" if version else track
+    track_display  = f"{track} – {version}" if version else track
+    league_display = LEAGUE_NAMES.get(league, league.upper())
     view = BrandSelectView(
         nickname, track, version, total_laps,
-        brands_models, channel, settings, hard_enabled
+        brands_models, channel, settings, hard_enabled, league
     )
     await interaction.followup.send(
-        f"🏁 Nächstes Rennen: **{track_display}** ({total_laps} Runden)\n"
+        f"🏁 **{league_display}** | {track_display} ({total_laps} Runden)\n"
         f"Bitte wähle zuerst die **Marke**:",
         view=view,
         ephemeral=True
@@ -102,11 +114,12 @@ async def strategie(interaction: discord.Interaction):
 
 
 # ─────────────────────────────────────────────
-# View: Markenauswahl
+# Markenauswahl
 # ─────────────────────────────────────────────
 
 class BrandSelectView(discord.ui.View):
-    def __init__(self, nickname, track, version, total_laps, brands_models, channel, settings, hard_enabled):
+    def __init__(self, nickname, track, version, total_laps,
+                 brands_models, channel, settings, hard_enabled, league):
         super().__init__(timeout=120)
         self.nickname      = nickname
         self.track         = track
@@ -116,6 +129,7 @@ class BrandSelectView(discord.ui.View):
         self.channel       = channel
         self.settings      = settings
         self.hard_enabled  = hard_enabled
+        self.league        = league
 
         brands  = sorted(brands_models.keys())[:25]
         options = [discord.SelectOption(label=b, value=b) for b in brands]
@@ -124,9 +138,7 @@ class BrandSelectView(discord.ui.View):
         self.add_item(select)
 
     async def brand_selected(self, interaction: discord.Interaction):
-        # Sofort bestätigen bevor irgendwas geladen wird
         await interaction.response.defer(ephemeral=True)
-
         brand  = interaction.data["values"][0]
         models = self.brands_models.get(brand, [])
 
@@ -134,13 +146,12 @@ class BrandSelectView(discord.ui.View):
             await proceed_to_car(
                 interaction, self.nickname, self.track, self.version,
                 self.total_laps, brand, models[0],
-                self.channel, self.settings, self.hard_enabled,
-                use_followup=True
+                self.channel, self.settings, self.hard_enabled, self.league
             )
         else:
             view = ModelSelectView(
                 self.nickname, self.track, self.version, self.total_laps,
-                brand, models, self.channel, self.settings, self.hard_enabled
+                brand, models, self.channel, self.settings, self.hard_enabled, self.league
             )
             await interaction.edit_original_response(
                 content=f"Marke: **{brand}**\nBitte wähle das **Modell**:",
@@ -149,11 +160,12 @@ class BrandSelectView(discord.ui.View):
 
 
 # ─────────────────────────────────────────────
-# View: Modellauswahl
+# Modellauswahl
 # ─────────────────────────────────────────────
 
 class ModelSelectView(discord.ui.View):
-    def __init__(self, nickname, track, version, total_laps, brand, models, channel, settings, hard_enabled):
+    def __init__(self, nickname, track, version, total_laps,
+                 brand, models, channel, settings, hard_enabled, league):
         super().__init__(timeout=120)
         self.nickname     = nickname
         self.track        = track
@@ -163,6 +175,7 @@ class ModelSelectView(discord.ui.View):
         self.channel      = channel
         self.settings     = settings
         self.hard_enabled = hard_enabled
+        self.league       = league
 
         options = [discord.SelectOption(label=m, value=m) for m in models[:25]]
         select  = discord.ui.Select(placeholder="Modell auswählen...", options=options)
@@ -170,15 +183,12 @@ class ModelSelectView(discord.ui.View):
         self.add_item(select)
 
     async def model_selected(self, interaction: discord.Interaction):
-        # Sofort bestätigen bevor irgendwas geladen wird
         await interaction.response.defer(ephemeral=True)
-
         model = interaction.data["values"][0]
         await proceed_to_car(
             interaction, self.nickname, self.track, self.version,
             self.total_laps, self.brand, model,
-            self.channel, self.settings, self.hard_enabled,
-            use_followup=True
+            self.channel, self.settings, self.hard_enabled, self.league
         )
 
 
@@ -187,38 +197,44 @@ class ModelSelectView(discord.ui.View):
 # ─────────────────────────────────────────────
 
 async def proceed_to_car(interaction, nickname, track, version, total_laps,
-                         brand, model, channel, settings, hard_enabled,
-                         use_followup=False):
-    existing    = get_driver_data(nickname, track, version, brand, model)
+                         brand, model, channel, settings, hard_enabled, league):
+    existing    = get_driver_data(nickname, track, version, brand, model, league)
     car_display = f"{brand} {model}"
 
     async def send(content=None, embed=None, view=None):
-        """Einheitliche Sendefunktion – nutzt edit_original_response nach defer."""
         await interaction.edit_original_response(content=content, embed=embed, view=view)
 
     if existing:
         embed = discord.Embed(
             title="📋 Gespeicherte Daten gefunden",
-            description=(
-                f"Strecke: **{track}{' – ' + version if version else ''}**"
-                f" | Fahrzeug: **{car_display}**"
-            ),
+            description=f"Strecke: **{track}{' – '+version if version else ''}** | Fahrzeug: **{car_display}**",
             color=0xFFA500
         )
-        embed.add_field(name="🔴 Soft",   value=seconds_to_display(float(str(existing["Zeit_Soft_s"]).replace(",","."))), inline=True)
-        embed.add_field(name="🟡 Medium", value=seconds_to_display(float(str(existing["Zeit_Medium_s"]).replace(",","."))) if existing.get("Zeit_Medium_s") else "–", inline=True)
+
+        def to_f(v):
+            try: return float(str(v).replace(",", "."))
+            except: return None
+
+        soft_f   = to_f(existing.get("Zeit_Soft_s"))
+        medium_f = to_f(existing.get("Zeit_Medium_s"))
+        hard_f   = to_f(existing.get("Zeit_Hard_s"))
+        med_pct  = to_f(existing.get("Medium_Pct"))
+        hard_pct = to_f(existing.get("Hard_Pct"))
+
+        embed.add_field(name="🔴 Soft",   value=seconds_to_display(soft_f)   if soft_f   else "–", inline=True)
+        embed.add_field(name="🟡 Medium", value=seconds_to_display(medium_f) if medium_f else "–", inline=True)
         if hard_enabled:
-            embed.add_field(name="⚪ Hard", value=seconds_to_display(float(str(existing["Zeit_Hard_s"]).replace(",","."))) if existing.get("Zeit_Hard_s") else "–", inline=True)
-        embed.add_field(name="Medium %", value=f"+{float(str(existing.get('Medium_Pct','0')).replace(',','.')):.2f}%" if existing.get('Medium_Pct') else "–", inline=True)
+            embed.add_field(name="⚪ Hard", value=seconds_to_display(hard_f) if hard_f else "–", inline=True)
+        embed.add_field(name="Medium %",         value=f"+{med_pct:.2f}%"  if med_pct  else "–", inline=True)
         if hard_enabled:
-            embed.add_field(name="Hard %", value=f"+{float(str(existing.get('Hard_Pct','0')).replace(',','.')):.2f}%" if existing.get('Hard_Pct') else "–", inline=True)
-        embed.add_field(name="Max. Soft-Runden", value=existing["Max_Soft_Runden"],                inline=True)
-        embed.add_field(name="Reichweite 70%",   value=f"{existing['Reichweite_70pct']} Runden",   inline=True)
+            embed.add_field(name="Hard %",       value=f"+{hard_pct:.2f}%" if hard_pct else "–", inline=True)
+        embed.add_field(name="Max. Soft-Runden", value=existing.get("Max_Soft_Runden", "–"),      inline=True)
+        embed.add_field(name="Reichweite 70%",   value=f"{existing.get('Reichweite_70pct','–')} Runden", inline=True)
         embed.add_field(name="Zuletzt",          value=existing.get("Letzte_Aktualisierung", "–"), inline=True)
 
         view = ConfirmDataView(
             nickname, track, version, brand, model,
-            total_laps, existing, settings, channel, hard_enabled
+            total_laps, existing, settings, channel, hard_enabled, league
         )
         await send(content=None, embed=embed, view=view)
 
@@ -235,35 +251,34 @@ async def proceed_to_car(interaction, nickname, track, version, total_laps,
             )
             view = SuggestLapTimeView(
                 nickname, track, version, brand, model,
-                total_laps, channel, best_lap_s, settings, hard_enabled
+                total_laps, channel, best_lap_s, settings, hard_enabled, league
             )
             await send(content=msg, embed=None, view=view)
         else:
-            prefill = build_prefill(0, nickname, settings, hard_enabled)
+            prefill = build_prefill(0, nickname, settings, hard_enabled, league=league)
             modal   = make_modal(
                 nickname, track, version, brand, model,
-                total_laps, channel, hard_enabled, prefill=prefill
+                total_laps, channel, hard_enabled, league, prefill=prefill
             )
-            # Modal kann nicht über edit_original_response gesendet werden –
-            # hier brauchen wir einen frischen Interaction-Token, daher followup + modal trick:
             await interaction.edit_original_response(
                 content="Bitte gib deine Zeiten ein:",
                 view=OpenModalView(nickname, track, version, brand, model,
-                                   total_laps, channel, hard_enabled, prefill)
+                                   total_laps, channel, hard_enabled, league, prefill)
             )
 
 
 class OpenModalView(discord.ui.View):
-    """Einzel-Button der das Modal öffnet – Workaround weil Modal nach defer nicht direkt geht."""
-    def __init__(self, nickname, track, version, brand, model, total_laps, channel, hard_enabled, prefill):
+    def __init__(self, nickname, track, version, brand, model,
+                 total_laps, channel, hard_enabled, league, prefill):
         super().__init__(timeout=120)
-        self.d = (nickname, track, version, brand, model, total_laps, channel, hard_enabled, prefill)
+        self.d = (nickname, track, version, brand, model,
+                  total_laps, channel, hard_enabled, league, prefill)
 
     @discord.ui.button(label="✏️ Zeiten eingeben", style=discord.ButtonStyle.primary)
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        n, tr, v, br, mo, l, ch, hard, prefill = self.d
+        n, tr, v, br, mo, l, ch, hard, league, prefill = self.d
         await interaction.response.send_modal(
-            make_modal(n, tr, v, br, mo, l, ch, hard, prefill=prefill)
+            make_modal(n, tr, v, br, mo, l, ch, hard, league, prefill=prefill)
         )
         self.stop()
 
@@ -273,18 +288,27 @@ class OpenModalView(discord.ui.View):
 # ─────────────────────────────────────────────
 
 @tree.command(name="naechstes_rennen", description="Zeigt das nächste Rennen im Kalender")
+@app_commands.describe(liga="Liga auswählen (Standard: RTC)")
+@app_commands.choices(liga=[
+    app_commands.Choice(name="RTC",   value="rtc"),
+    app_commands.Choice(name="AWL",   value="awl"),
+    app_commands.Choice(name="GTFUN", value="gtfun"),
+])
 @check_channel()
-async def naechstes_rennen(interaction: discord.Interaction):
-    race = get_next_race()
+async def naechstes_rennen(interaction: discord.Interaction,
+                           liga: app_commands.Choice[str] = None):
+    league = normalise_league(liga.value if liga else DEFAULT_LEAGUE)
+    race   = get_next_race(league)
     if not race:
         await interaction.response.send_message("Kein Rennen im Kalender.", ephemeral=True)
         return
 
-    track   = race.get("Strecke", "–")
-    version = race.get("Version", "")
+    track         = race.get("Strecke", "–")
+    version       = race.get("Version", "")
     track_display = f"{track} – {version}" if version else track
+    league_display = LEAGUE_NAMES.get(league, league.upper())
 
-    embed = discord.Embed(title="📅 Nächstes Rennen", color=0x00BFFF)
+    embed = discord.Embed(title=f"📅 Nächstes Rennen – {league_display}", color=0x00BFFF)
     embed.add_field(name="🏟️ Strecke", value=track_display,          inline=True)
     embed.add_field(name="📆 Datum",   value=race.get("Datum", "–"),  inline=True)
     embed.add_field(name="🔄 Runden",  value=race.get("Runden", "–"), inline=True)

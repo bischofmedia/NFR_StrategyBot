@@ -60,7 +60,7 @@ def _build_prompt(
     prompt = f"""Du bist ein erfahrener Simracing-Stratege für Gran Turismo 7.
 
 Dir werden alle vorberechneten validen Rennstrategien übergeben, sortiert nach Gesamtzeit.
-Deine Aufgabe: Wähle die BESTE 1-Stopp- und 2-Stopp-Strategie für Pole und Nicht-Pole aus.
+Deine Aufgabe: Wähle die zwei schnellsten Strategien für Pole-Start und die zwei schnellsten für Nicht-Pole-Start aus. Es müssen nicht zwingend 1-Stopp und 2-Stopp sein – einfach die zwei besten.
 Begründe kurz warum – berücksichtige Reifenabbau, Tankgewicht und Pitstop-Verluste. Hinweis: Es gibt keine Safety Cars in GT7-Rennen.
 
 WICHTIG: Wähle nur Strategien die exakt in den Listen "valid_strategies_from_pole" bzw.
@@ -72,20 +72,20 @@ RENNDATEN:
 Antworte AUSSCHLIESSLICH mit folgendem JSON – kein Text davor oder danach, keine Markdown-Backticks:
 {{
   "strategies": {{
-    "1_stop_pole": {{
-      "stints": [{{"tyre": "Soft", "laps": 9}}, {{"tyre": "Medium", "laps": 21}}],
+    "pole_1": {{
+      "stints": [{{"tyre": "Soft", "laps": 12}}, {{"tyre": "Medium", "laps": 18}}],
       "reasoning": "Kurze Begründung auf Deutsch (1-2 Sätze)"
     }},
-    "1_stop_no_pole": {{
-      "stints": [{{"tyre": "...", "laps": 0}}],
+    "pole_2": {{
+      "stints": [{{"tyre": "...", "laps": 0}}, {{"tyre": "...", "laps": 0}}],
       "reasoning": "..."
     }},
-    "2_stop_pole": {{
-      "stints": [{{"tyre": "...", "laps": 0}}, {{"tyre": "...", "laps": 0}}, {{"tyre": "...", "laps": 0}}],
+    "no_pole_1": {{
+      "stints": [{{"tyre": "...", "laps": 0}}, {{"tyre": "...", "laps": 0}}],
       "reasoning": "..."
     }},
-    "2_stop_no_pole": {{
-      "stints": [{{"tyre": "...", "laps": 0}}, {{"tyre": "...", "laps": 0}}, {{"tyre": "...", "laps": 0}}],
+    "no_pole_2": {{
+      "stints": [{{"tyre": "...", "laps": 0}}, {{"tyre": "...", "laps": 0}}],
       "reasoning": "..."
     }}
   }},
@@ -134,6 +134,21 @@ def get_gemini_strategies(
         print("[Gemini] Keine validen Strategien – Fallback aktiv")
         return None
 
+    def ensure_stop_coverage(results):
+        """Stellt sicher dass mindestens 1-Stopp und 2-Stopp in der Liste sind."""
+        stops_present = {r.pit_stops for r in results}
+        all_by_stops = {}
+        # Sammle alle Ergebnisse aus dem vollen Pool (wird von calculate_strategies zurückgegeben)
+        for r in results:
+            if r.pit_stops not in all_by_stops:
+                all_by_stops[r.pit_stops] = r
+        # Füge fehlende hinzu
+        extra = [r for stops, r in all_by_stops.items() if stops not in stops_present]
+        return results + extra
+
+    all_results_pole    = ensure_stop_coverage(all_results_pole)
+    all_results_no_pole = ensure_stop_coverage(all_results_no_pole)
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
@@ -168,10 +183,10 @@ def get_gemini_strategies(
         overall = parsed.get("overall_recommendation", "")
 
         key_map = {
-            "1-Stopp Pole":       ("1_stop_pole",    all_results_pole),
-            "1-Stopp Nicht-Pole": ("1_stop_no_pole", all_results_no_pole),
-            "2-Stopp Pole":       ("2_stop_pole",    all_results_pole),
-            "2-Stopp Nicht-Pole": ("2_stop_no_pole", all_results_no_pole),
+            "Pole – Variante 1":       ("pole_1",    all_results_pole),
+            "Pole – Variante 2":       ("pole_2",    all_results_pole),
+            "Nicht-Pole – Variante 1": ("no_pole_1", all_results_no_pole),
+            "Nicht-Pole – Variante 2": ("no_pole_2", all_results_no_pole),
         }
 
         result = {"overall": overall, "strategies": {}, "reasonings": {}}
@@ -201,63 +216,52 @@ def get_gemini_strategies(
 
 
 def fallback_strategies(all_results_pole: list, all_results_no_pole: list) -> dict:
-    """Algorithmischer Fallback wenn Gemini nicht verfügbar."""
-
-    def best_by_stops(results, stops):
-        return next((r for r in results if r.pit_stops == stops), None)
+    """Algorithmischer Fallback: Top-2 je Pole/Nicht-Pole."""
 
     def fmt(s):
-        if s < 60:
-            return f"{s:.1f}s"
-        mins = int(s // 60); secs = s % 60
-        return f"{mins}:{secs:04.1f}min"
+        if s < 60: return f"{s:.1f}s"
+        return f"{int(s//60)}:{s%60:04.1f}min"
 
-    strategies = {
-        "1-Stopp Pole":       best_by_stops(all_results_pole,    1),
-        "1-Stopp Nicht-Pole": best_by_stops(all_results_no_pole, 1),
-        "2-Stopp Pole":       best_by_stops(all_results_pole,    2),
-        "2-Stopp Nicht-Pole": best_by_stops(all_results_no_pole, 2),
-    }
+    def top2(results):
+        seen_desc = set()
+        out = []
+        for r in sorted(results, key=lambda x: x.total_time_s):
+            if r.description not in seen_desc:
+                seen_desc.add(r.description)
+                out.append(r)
+            if len(out) == 2:
+                break
+        return out
 
+    pole_top    = top2(all_results_pole)
+    nopole_top  = top2(all_results_no_pole)
+
+    labels = [
+        "Pole – Variante 1", "Pole – Variante 2",
+        "Nicht-Pole – Variante 1", "Nicht-Pole – Variante 2",
+    ]
+    pools = [pole_top, pole_top, nopole_top, nopole_top]
+    idxs  = [0, 1, 0, 1]
+
+    strategies = {}
     reasonings = {}
-    s1p = strategies.get("1-Stopp Pole")
-    s2p = strategies.get("2-Stopp Pole")
-    s1n = strategies.get("1-Stopp Nicht-Pole")
-    s2n = strategies.get("2-Stopp Nicht-Pole")
 
-    # Vergleich 1-Stopp vs 2-Stopp immer einbauen
-    diff_1v2 = fmt(abs(s1p.total_time_s - s2p.total_time_s)) if s1p and s2p else None
-    faster   = ("1-Stopp" if s1p.total_time_s <= s2p.total_time_s else "2-Stopp") if s1p and s2p else None
+    for label, pool, idx in zip(labels, pools, idxs):
+        r = pool[idx] if idx < len(pool) else None
+        strategies[label] = r
+        if r:
+            stops_str = f"{r.pit_stops} Stopp{'s' if r.pit_stops != 1 else ''}"
+            reasonings[label] = f"{stops_str}: {r.description}"
 
-    if s1p:
-        soft_r   = sum(n for t, n in s1p.stints if t == TYRE_SOFT)
-        diff_str = f" – {diff_1v2} schneller als 2-Stopp" if diff_1v2 and faster == "1-Stopp" else                    f" – {diff_1v2} langsamer als 2-Stopp" if diff_1v2 else ""
-        reasonings["1-Stopp Pole"] = f"Minimaler Boxenstopp-Verlust, {soft_r} Soft-Runden{diff_str}."
-
-    if s2p:
-        diff_str = f" – {diff_1v2} schneller als 1-Stopp" if diff_1v2 and faster == "2-Stopp" else                    f" – {diff_1v2} langsamer als 1-Stopp" if diff_1v2 else ""
-        reasonings["2-Stopp Pole"] = f"Frischere Reifen durch zweiten Stopp{diff_str}."
-
-    if s1n:
-        reasonings["1-Stopp Nicht-Pole"] = "Verkehrsmalus R1+2s/R2+1.5s/R3+1s kostet etwas Zeit gegenüber Pole."
-
-    if s2n:
-        diff_str = f" – {fmt(abs(s2n.total_time_s - s1n.total_time_s))} langsamer als 1-Stopp" if s1n else ""
-        reasonings["2-Stopp Nicht-Pole"] = f"Zwei Stopps bei Nicht-Pole-Start{diff_str}."
-
+    # Gesamtempfehlung
+    p1 = strategies.get("Pole – Variante 1")
+    p2 = strategies.get("Pole – Variante 2")
     overall = ""
-    if s1p and s2p:
-        diff = abs(s1p.total_time_s - s2p.total_time_s)
-        overall = (
-            f"**{faster}** ist {fmt(diff)} schneller. "
-            + ("Der Pitstop-Verlust überwiegt den Vorteil frischer Reifen."
-               if faster == "1-Stopp"
-               else "Frische Reifen im zweiten Stint gleichen den Pitstop-Verlust mehr als aus.")
-        )
-    elif s1p:
-        overall = "Nur 1-Stopp-Strategie verfügbar."
-    elif s2p:
-        overall = "Nur 2-Stopp-Strategie verfügbar."
+    if p1:
+        overall = f"Schnellste Option von der Pole: {p1.description}."
+        if p2:
+            diff = p2.total_time_s - p1.total_time_s
+            overall += f" Variante 2 ({p2.description}) ist {fmt(diff)} langsamer."
 
     return {"strategies": strategies, "reasonings": reasonings, "overall": overall}
 
