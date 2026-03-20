@@ -152,6 +152,7 @@ def get_gemini_strategies(
         return None
 
     try:
+        print(f"[Gemini] Starte Anfrage für {track} ({total_laps} Runden)...")
         client = genai.Client(api_key=api_key)
 
         prompt = _build_prompt(
@@ -171,6 +172,7 @@ def get_gemini_strategies(
             ),
         )
 
+        print(f"[Gemini] Antwort erhalten ({len(response.text)} Zeichen)")
         raw = response.text.strip()
         # Sicherheits-Strip falls doch Backticks kommen
         if raw.startswith("```"):
@@ -203,12 +205,13 @@ def get_gemini_strategies(
         return result
 
     except Exception as e:
+        import traceback
         err = str(e).lower()
         if any(x in err for x in ["quota", "resource_exhausted", "rate", "429", "limit"]):
-            print(f"[Gemini] Tageskontingent erschöpft – Fallback aktiv: {e}")
+            print(f"[Gemini] ⚠️ Tageskontingent erschöpft – Fallback aktiv")
+            print(f"[Gemini] Detail: {e}")
         else:
-            import traceback
-            print(f"[Gemini] Fehler – Fallback aktiv: {e}")
+            print(f"[Gemini] ❌ Fehler – Fallback aktiv: {e}")
             traceback.print_exc()
         return None
 

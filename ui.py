@@ -149,6 +149,45 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
                 if label not in reasonings:
                     reasonings[label] = sorted_pool[idx].description
 
+    # Fünfte Variante: schnellste Mono-Reifen-Strategie (falls nicht schon vorhanden)
+    def get_fastest_single_tyre(results, allowed, required):
+        """Schnellste Strategie die nur einen Reifentyp verwendet."""
+        # Reifen-Priorität: schnellster zuerst (Soft > Medium > Hard)
+        priority = [TYRE_SOFT, TYRE_MEDIUM, TYRE_HARD]
+        for tyre in priority:
+            if tyre not in allowed:
+                continue
+            if required and tyre not in required:
+                # Pflicht-Reifen vorhanden aber dieser nicht dabei → überspringen
+                pass
+            for r in results:
+                if all(t == tyre for t, _ in r.stints):
+                    return r
+        return None
+
+    # Fünfte Variante: schnellste Mono-Reifen-Strategie, je Pole + Nicht-Pole
+    if not tyre_change_req:
+        allowed_tyres = []
+        if soft_allowed:   allowed_tyres.append(TYRE_SOFT)
+        if medium_allowed: allowed_tyres.append(TYRE_MEDIUM)
+        if hard_allowed:   allowed_tyres.append(TYRE_HARD)
+        required_tyres = []
+        if soft_required:   required_tyres.append(TYRE_SOFT)
+        if medium_required: required_tyres.append(TYRE_MEDIUM)
+        if hard_required:   required_tyres.append(TYRE_HARD)
+
+        existing_descs = {r.description for r in strategies.values() if r}
+
+        best_mono_pole   = get_fastest_single_tyre(all_pole,    allowed_tyres, required_tyres)
+        best_mono_nopole = get_fastest_single_tyre(all_no_pole, allowed_tyres, required_tyres)
+
+        if best_mono_pole and best_mono_pole.description not in existing_descs:
+            strategies["Pole – Schnellster Reifen"]          = best_mono_pole
+            reasonings["Pole – Schnellster Reifen"]          = "Schnellste Mono-Reifen-Strategie ohne Wechselpflicht."
+        if best_mono_nopole and best_mono_nopole.description not in existing_descs:
+            strategies["Nicht-Pole – Schnellster Reifen"]    = best_mono_nopole
+            reasonings["Nicht-Pole – Schnellster Reifen"]    = "Schnellste Mono-Reifen-Strategie bei Nicht-Pole."
+
     # Embed
     from sheets import VALID_LEAGUES
     league_names = {"rtc": "RTC", "awl": "AWL", "gtfun": "GTFUN"}
@@ -227,7 +266,7 @@ def make_modal(nickname, track, version, brand, model, total_laps,
         class ModalHard(Modal, title="Deine Daten eingeben"):
             zeit_soft   = TextInput(label="Rundenzeit auf Soft (m:ss.mmm)",            placeholder="z.B. 1:49.300", required=True)
             zeit_medium = TextInput(label="Rundenzeit auf Medium (leer = Durchschnitt)",placeholder="z.B. 1:50.400 (optional)", required=False)
-            zeit_hard   = TextInput(label="Rundenzeit auf Hard (m:ss.mmm)",             placeholder="z.B. 1:52.000", required=True)
+            zeit_hard   = TextInput(label="Rundenzeit auf Hard (leer = Durchschnitt)",  placeholder="z.B. 1:52.000 (optional)", required=False)
             max_soft    = TextInput(label="Maximale Runden auf Soft",                   placeholder="z.B. 13",       required=True)
             reichweite  = TextInput(label="Reichweite bei 70% Tank (Runden)",           placeholder="z.B. 15",       required=True)
             def __init__(self):
@@ -271,8 +310,8 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
     try:
         soft_s     = parse_time(raw_soft)
         hard_s     = parse_time(raw_hard) if raw_hard and raw_hard.strip() else None
-        max_soft   = int(raw_max_soft.strip())
-        reichweite = int(raw_reichweite.strip())
+        max_soft   = int(str(raw_max_soft).strip())
+        reichweite = int(str(raw_reichweite).strip())
     except ValueError:
         await interaction.response.send_message(
             "❌ Ungültige Eingabe. Format: m:ss.mmm (z.B. 1:49.300)", ephemeral=True
@@ -289,10 +328,16 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
     else:
         medium_s = None
 
+    avg = get_driver_avg_pct(nickname, league)
+
     if medium_s is None:
-        avg = get_driver_avg_pct(nickname, league)
         med_pct = avg["medium_pct"] if avg["medium_pct"] is not None else float(settings.get("medium_default_pct", 1.0))
         medium_s = round(soft_s * (1 + med_pct / 100), 3)
+
+    hard_allowed = settings.get("hard_tyre_allowed", "FALSE").upper() == "TRUE"
+    if hard_allowed and hard_s is None:
+        hard_pct_val = avg["hard_pct"] if avg["hard_pct"] is not None else float(settings.get("hard_default_pct", 2.5))
+        hard_s = round(soft_s * (1 + hard_pct_val / 100), 3)
 
     data = {
         "zeit_soft_s": soft_s, "zeit_medium_s": medium_s,
@@ -407,24 +452,30 @@ class DetailSelectView(discord.ui.View):
             pit_loss_s=pit_loss_s, fuel_weight_s=fuel_weight_s,
         )
 
-        labels_short = {
-            "Pole – Variante 1":       "📋 Pole V1",
-            "Pole – Variante 2":       "📋 Pole V2",
-            "Nicht-Pole – Variante 1": "📋 Nicht-Pole V1",
-            "Nicht-Pole – Variante 2": "📋 Nicht-Pole V2",
+        def stint_short(result):
+            """Kurzform der Stints: z.B. 7S-11M oder 6S-6S-6S"""
+            parts = []
+            for tyre, laps in result.stints:
+                parts.append(f"{laps}{tyre[0]}")
+            return "-".join(parts)
+
+        prefix_style = {
+            "Pole":      discord.ButtonStyle.primary,
+            "Nicht-Pole": discord.ButtonStyle.secondary,
+            "Schnellster": discord.ButtonStyle.success,
         }
-        styles = {
-            "Pole – Variante 1":       discord.ButtonStyle.primary,
-            "Pole – Variante 2":       discord.ButtonStyle.primary,
-            "Nicht-Pole – Variante 1": discord.ButtonStyle.secondary,
-            "Nicht-Pole – Variante 2": discord.ButtonStyle.secondary,
-        }
+
         for label, result in strategies.items():
             if result is None:
                 continue
+            # Button-Label: "Pole 7S-11M" oder "N-Pole 6S-6S-6S"
+            prefix = "Pole" if "Nicht-Pole" not in label else "N-Pole"
+            short  = stint_short(result)
+            btn_label = f"📋 {prefix} {short}"[:80]  # Discord max 80 Zeichen
+            style = discord.ButtonStyle.primary if "Nicht-Pole" not in label and "Schnellster" not in label else                     discord.ButtonStyle.success  if "Schnellster" in label else                     discord.ButtonStyle.secondary
             btn = discord.ui.Button(
-                label=labels_short.get(label, label),
-                style=styles.get(label, discord.ButtonStyle.secondary),
+                label=btn_label,
+                style=style,
                 custom_id=label,
             )
             btn.callback = self._make_callback(label)
