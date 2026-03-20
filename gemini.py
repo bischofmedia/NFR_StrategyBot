@@ -40,7 +40,7 @@ def _build_prompt(
         "tyre_data": {
             "soft_base_time": fmt(base_soft_s),
             "medium_pct_slower": round(medium_pct, 3),
-            "hard_pct_slower": round(hard_pct, 3) if hard_enabled else "disabled",
+            "hard_pct_slower": round(hard_pct, 3) if hard_pct > 0 else "disabled",
             "max_soft_laps": max_soft_runden,
             "soft_degradation": "Lap 1: +0.5s (cold tyres). Laps 2 to 40%: plateau (optimal). 40-70%: +0 to +1s. 70-100%: +1 to +3s.",
         },
@@ -160,7 +160,7 @@ def get_gemini_strategies(
             track, version, car, total_laps,
             base_soft_s, medium_pct, hard_pct,
             max_soft_runden, reichweite, tank_size,
-            start_fuel_pct, pit_loss, fuel_weight_s, hard_enabled,
+            start_fuel_pct, pit_loss, fuel_weight_s,
         )
 
         response = client.models.generate_content(

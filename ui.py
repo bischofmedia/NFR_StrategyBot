@@ -176,17 +176,19 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
         if medium_required: required_tyres.append(TYRE_MEDIUM)
         if hard_required:   required_tyres.append(TYRE_HARD)
 
-        existing_descs = {r.description for r in strategies.values() if r}
+        # Getrennt prüfen: Pole-Descs und Nicht-Pole-Descs separat
+        pole_descs    = {r.description for k, r in strategies.items() if r and "Nicht-Pole" not in k}
+        nopole_descs  = {r.description for k, r in strategies.items() if r and "Nicht-Pole" in k}
 
         best_mono_pole   = get_fastest_single_tyre(all_pole,    allowed_tyres, required_tyres)
         best_mono_nopole = get_fastest_single_tyre(all_no_pole, allowed_tyres, required_tyres)
 
-        if best_mono_pole and best_mono_pole.description not in existing_descs:
-            strategies["Pole – Schnellster Reifen"]          = best_mono_pole
-            reasonings["Pole – Schnellster Reifen"]          = "Schnellste Mono-Reifen-Strategie ohne Wechselpflicht."
-        if best_mono_nopole and best_mono_nopole.description not in existing_descs:
-            strategies["Nicht-Pole – Schnellster Reifen"]    = best_mono_nopole
-            reasonings["Nicht-Pole – Schnellster Reifen"]    = "Schnellste Mono-Reifen-Strategie bei Nicht-Pole."
+        if best_mono_pole and best_mono_pole.description not in pole_descs:
+            strategies["Pole – Schnellster Reifen"]       = best_mono_pole
+            reasonings["Pole – Schnellster Reifen"]       = "Schnellste Mono-Reifen-Strategie ohne Wechselpflicht."
+        if best_mono_nopole and best_mono_nopole.description not in nopole_descs:
+            strategies["Nicht-Pole – Schnellster Reifen"] = best_mono_nopole
+            reasonings["Nicht-Pole – Schnellster Reifen"] = "Schnellste Mono-Reifen-Strategie bei Nicht-Pole."
 
     # Embed
     from sheets import VALID_LEAGUES
