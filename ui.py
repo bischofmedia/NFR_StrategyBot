@@ -244,16 +244,14 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
     start_pct_disp = int(float(settings.get("start_fuel_pct", 70)))
 
     data_line = (
-        f"{tyre_line}
-"
+        f"{tyre_line}\n"
         f"Maximale Runden Soft: **{max_soft_disp}**  |  "
         f"Tank {start_pct_disp}% reicht für **{reich_disp} Runden**"
     )
 
     embed = discord.Embed(
         title=f"🏁 {league_display} – {track_display}",
-        description=f"👤 **{nickname}** | 🚗 {car_display} | 🔄 {total_laps} Runden{pit_window_str}
-{data_line}",
+        description=f"👤 **{nickname}** | 🚗 {car_display} | 🔄 {total_laps} Runden{pit_window_str}\n{data_line}",
         color=0x00BFFF
     )
 
