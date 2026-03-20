@@ -76,13 +76,19 @@ def get_track_data(track: str, version: str) -> dict:
 def get_settings(league: str = DEFAULT_LEAGUE) -> dict:
     league = normalise_league(league)
     sheet  = get_sheet()
-    ws     = sheet.worksheet(f"{league}_settings")
-    rows   = ws.get_all_values(value_render_option='UNFORMATTED_VALUE')
-    settings = {}
-    for row in rows[1:]:
-        if len(row) >= 2 and row[0]:
-            settings[str(row[0]).strip()] = str(row[1]).strip()
-    return settings
+    # Versuche zuerst liga-spezifischen Tab, dann Legacy-Tab "Settings"
+    for tab_name in [f"{league}_settings", "Settings"]:
+        try:
+            ws   = sheet.worksheet(tab_name)
+            rows = ws.get_all_values(value_render_option='UNFORMATTED_VALUE')
+            settings = {}
+            for row in rows[1:]:
+                if len(row) >= 2 and row[0]:
+                    settings[str(row[0]).strip()] = str(row[1]).strip()
+            return settings
+        except Exception:
+            continue
+    return {}
 
 
 # ─────────────────────────────────────────────
@@ -92,7 +98,16 @@ def get_settings(league: str = DEFAULT_LEAGUE) -> dict:
 def get_next_race(league: str = DEFAULT_LEAGUE) -> dict | None:
     league = normalise_league(league)
     sheet  = get_sheet()
-    ws     = sheet.worksheet(f"{league}_rennkalender")
+    # Versuche zuerst liga-spezifischen Tab, dann Legacy-Tab "Rennkalender"
+    ws = None
+    for tab_name in [f"{league}_rennkalender", "Rennkalender"]:
+        try:
+            ws = sheet.worksheet(tab_name)
+            break
+        except Exception:
+            continue
+    if ws is None:
+        return None
     rows   = ws.get_all_records()
     today  = datetime.today().date()
     upcoming = []
@@ -144,6 +159,14 @@ def ensure_driver_sheet(nickname: str, league: str = DEFAULT_LEAGUE):
     sheet  = get_sheet()
     name   = _driver_sheet_name(nickname, league)
     titles = [ws.title for ws in sheet.worksheets()]
+    # Migriere alten Tab-Namen wenn vorhanden
+    if name not in titles and nickname in titles:
+        try:
+            old_ws = sheet.worksheet(nickname)
+            old_ws.update_title(name)
+            titles = [ws.title for ws in sheet.worksheets()]
+        except Exception:
+            pass
     if name not in titles:
         ws = sheet.add_worksheet(title=name, rows=500, cols=20)
         ws.append_row([
@@ -161,6 +184,9 @@ def get_driver_data(nickname: str, track: str, version: str,
     sheet  = get_sheet()
     name   = _driver_sheet_name(nickname, league)
     titles = [ws.title for ws in sheet.worksheets()]
+    # Fallback auf alten Tab-Namen (ohne Liga-Prefix)
+    if name not in titles and nickname in titles:
+        name = nickname
     if name not in titles:
         return None
     ws   = sheet.worksheet(name)
@@ -216,13 +242,17 @@ def save_driver_data(nickname: str, track: str, version: str,
     medium_pct = round((medium_s - soft_s) / soft_s * 100, 4) if medium_s else None
     hard_pct   = round((hard_s   - soft_s) / soft_s * 100, 4) if hard_s   else None
 
+    def fp(v, decimals):
+        """Float als String mit Punkt speichern – verhindert Locale-Komma in Google Sheets."""
+        return f"{float(v):.{decimals}f}" if v is not None and v != "" else ""
+
     new_row = [
         track, version, brand, model,
-        round(float(soft_s), 3),
-        round(float(medium_s), 3) if medium_s else "",
-        round(float(medium_pct), 4) if medium_pct is not None else "",
-        round(float(hard_s), 3)    if hard_s   else "",
-        round(float(hard_pct), 4)  if hard_pct is not None else "",
+        fp(soft_s, 3),
+        fp(medium_s, 3) if medium_s else "",
+        fp(medium_pct, 4) if medium_pct is not None else "",
+        fp(hard_s, 3)    if hard_s   else "",
+        fp(hard_pct, 4)  if hard_pct is not None else "",
         int(data["max_soft_runden"]),
         int(data["reichweite_70pct"]),
         now

@@ -183,12 +183,28 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
         best_mono_pole   = get_fastest_single_tyre(all_pole,    allowed_tyres, required_tyres)
         best_mono_nopole = get_fastest_single_tyre(all_no_pole, allowed_tyres, required_tyres)
 
+        def mono_reasoning(mono_result, best_result):
+            """Begründung abhängig von Zeitdifferenz zur schnellsten Strategie."""
+            if best_result is None:
+                return "Schnellste Mono-Reifen-Option."
+            diff = mono_result.total_time_s - best_result.total_time_s
+            def fmt(s): return f"{s:.1f}s" if s < 60 else f"{int(s//60)}:{s%60:04.1f}min"
+            if diff <= 0:
+                return "Diese Mono-Reifen-Strategie ist die schnellste Option."
+            elif diff < 5:
+                return f"Echte Alternative – nur {fmt(diff)} langsamer als Variante 1, dafür kein Reifenwechsel nötig."
+            else:
+                return f"Zur Info: {fmt(diff)} langsamer als die empfohlene Strategie. Kein Reifenwechsel nötig, aber deutlicher Zeitverlust."
+
+        best_pole_result   = strategies.get("Pole – Variante 1")
+        best_nopole_result = strategies.get("Nicht-Pole – Variante 1")
+
         if best_mono_pole and best_mono_pole.description not in pole_descs:
             strategies["Pole – Schnellster Reifen"]       = best_mono_pole
-            reasonings["Pole – Schnellster Reifen"]       = "Schnellste Mono-Reifen-Strategie ohne Wechselpflicht."
+            reasonings["Pole – Schnellster Reifen"]       = mono_reasoning(best_mono_pole, best_pole_result)
         if best_mono_nopole and best_mono_nopole.description not in nopole_descs:
             strategies["Nicht-Pole – Schnellster Reifen"] = best_mono_nopole
-            reasonings["Nicht-Pole – Schnellster Reifen"] = "Schnellste Mono-Reifen-Strategie bei Nicht-Pole."
+            reasonings["Nicht-Pole – Schnellster Reifen"] = mono_reasoning(best_mono_nopole, best_nopole_result)
 
     # Embed
     from sheets import VALID_LEAGUES
@@ -203,9 +219,41 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
                                 for o, c in pit_windows)
         pit_window_str = f"\n🪟 Boxenfenster: {windows_fmt}"
 
+    # Fahrzeugdaten für Embed aufbereiten
+    def fmts(v):
+        fv = to_float(v)
+        return seconds_to_display(fv) if fv and fv > 0 else None
+
+    tyre_parts = []
+    if soft_allowed:
+        t = fmts(data.get("zeit_soft_s"))
+        if t: tyre_parts.append(f"🔴 {t}")
+    if medium_allowed:
+        t = fmts(data.get("zeit_medium_s"))
+        if t: tyre_parts.append(f"🟡 {t}")
+    if hard_allowed:
+        t = fmts(data.get("zeit_hard_s"))
+        if t: tyre_parts.append(f"⚪ {t}")
+
+    tyre_line = "  ".join(tyre_parts) if tyre_parts else "–"
+
+    max_soft_disp = str(max_soft)
+    reich_disp    = str(int(str(data["reichweite_70pct"]).replace(",",".").split(".")[0]))
+
+    # Startsprit-Prozent aus Settings für Reichweiten-Label
+    start_pct_disp = int(float(settings.get("start_fuel_pct", 70)))
+
+    data_line = (
+        f"{tyre_line}
+"
+        f"Maximale Runden Soft: **{max_soft_disp}**  |  "
+        f"Tank {start_pct_disp}% reicht für **{reich_disp} Runden**"
+    )
+
     embed = discord.Embed(
         title=f"🏁 {league_display} – {track_display}",
-        description=f"👤 **{nickname}** | 🚗 {car_display} | 🔄 {total_laps} Runden{pit_window_str}",
+        description=f"👤 **{nickname}** | 🚗 {car_display} | 🔄 {total_laps} Runden{pit_window_str}
+{data_line}",
         color=0x00BFFF
     )
 
@@ -348,9 +396,13 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
     }
     save_driver_data(nickname, track, version, brand, model, data, league)
 
-    await interaction.followup.send("✅ Daten gespeichert! Strategie wird berechnet...", ephemeral=True)
+    msg = await interaction.followup.send("✅ Daten gespeichert! Strategie wird berechnet...", ephemeral=True)
     await calculate_and_post(channel, nickname, track, version, brand, model,
                              total_laps, data, settings, league)
+    try:
+        await interaction.delete_original_response()
+    except Exception:
+        pass
 
 
 def build_prefill(soft_s, nickname, settings, hard_enabled, existing=None, league=DEFAULT_LEAGUE):
@@ -422,8 +474,11 @@ class ConfirmDataView(View):
             "max_soft_runden":  ex.get("Max_Soft_Runden", 13),
             "reichweite_70pct": ex.get("Reichweite_70pct", 15),
         }
-        await interaction.followup.send("✅ Strategie wird berechnet...", ephemeral=True)
         await calculate_and_post(ch, n, tr, v, br, mo, l, data, settings, league)
+        try:
+            await interaction.edit_original_response(content="​", embed=None, view=None)
+        except Exception:
+            pass
         self.stop()
 
     @discord.ui.button(label="✏️ Daten anpassen", style=discord.ButtonStyle.primary)
@@ -509,7 +564,6 @@ class DetailSelectView(discord.ui.View):
                 else:
                     chunk += line + "\n"
             await self.channel.send(chunk + "```")
-            await interaction.followup.send("✅ Detailansicht gepostet.", ephemeral=True)
             # Buttons erneut anzeigen
             new_view = DetailSelectView(
                 strategies=self.strategies, channel=self.channel,
