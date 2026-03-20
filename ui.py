@@ -185,16 +185,18 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
 
         def mono_reasoning(mono_result, best_result):
             """Begründung abhängig von Zeitdifferenz zur schnellsten Strategie."""
+            # Reifentyp der Mono-Strategie ermitteln
+            tyre = mono_result.stints[0][0] if mono_result.stints else "Soft"
             if best_result is None:
-                return "Schnellste Mono-Reifen-Option."
+                return f"Schnellste Strategie nur mit {tyre}-Reifen."
             diff = mono_result.total_time_s - best_result.total_time_s
             def fmt(s): return f"{s:.1f}s" if s < 60 else f"{int(s//60)}:{s%60:04.1f}min"
             if diff <= 0:
-                return "Diese Mono-Reifen-Strategie ist die schnellste Option."
+                return f"Nur {tyre}-Reifen – schnellste Option insgesamt."
             elif diff < 5:
-                return f"Echte Alternative – nur {fmt(diff)} langsamer als Variante 1, dafür kein Reifenwechsel nötig."
+                return f"Nur {tyre}-Reifen, {fmt(diff)} langsamer als Variante 1. Kein Wechsel auf anderen Reifentyp nötig."
             else:
-                return f"Zur Info: {fmt(diff)} langsamer als die empfohlene Strategie. Kein Reifenwechsel nötig, aber deutlicher Zeitverlust."
+                return f"Nur {tyre}-Reifen – zur Info: {fmt(diff)} langsamer als die empfohlene Strategie."
 
         best_pole_result   = strategies.get("Pole – Variante 1")
         best_nopole_result = strategies.get("Nicht-Pole – Variante 1")
@@ -285,7 +287,7 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
     extra_pole   = strategies.get("Pole – Schnellster Reifen")
     extra_nopole = strategies.get("Nicht-Pole – Schnellster Reifen")
     if extra_pole or extra_nopole:
-        embed.add_field(name="── Ohne Reifenwechsel ──", value="​", inline=False)
+        embed.add_field(name="── Nur ein Reifentyp ──", value="​", inline=False)
         if extra_pole:
             add_field("Pole – Schnellster Reifen", extra_pole)
         if extra_nopole:
