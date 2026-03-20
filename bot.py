@@ -142,8 +142,7 @@ class BrandSelectView(discord.ui.View):
 
         if len(models) == 1:
             await interaction.edit_original_response(
-                content=f"Marke: **{brand}** | Modell: **{models[0]}**
-Lade Daten...",
+                content=f"Marke: **{brand}** | Modell: **{models[0]}**\nLade Daten...",
                 view=None
             )
             await proceed_to_car(
