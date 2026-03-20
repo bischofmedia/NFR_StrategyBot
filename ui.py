@@ -281,6 +281,22 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
         add_field(label, strategies.get(label))
     embed.add_field(name="\u200b", value="\u200b", inline=True)
 
+    # Fünfte Variante: Mono-Reifen (kein Reifenwechsel)
+    extra_pole   = strategies.get("Pole – Schnellster Reifen")
+    extra_nopole = strategies.get("Nicht-Pole – Schnellster Reifen")
+    if extra_pole or extra_nopole:
+        embed.add_field(name="── Ohne Reifenwechsel ──", value="​", inline=False)
+        if extra_pole:
+            add_field("Pole – Schnellster Reifen", extra_pole)
+        if extra_nopole:
+            add_field("Nicht-Pole – Schnellster Reifen", extra_nopole)
+        # Leerzeichen für 3-Spalten-Layout
+        count = sum(1 for x in [extra_pole, extra_nopole] if x)
+        if count == 1:
+            embed.add_field(name="​", value="​", inline=True)
+            embed.add_field(name="​", value="​", inline=True)
+
+
     if overall:
         embed.add_field(name=f"{ai_label} – Gesamtempfehlung", value=overall[:1024], inline=False)
 
