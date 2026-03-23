@@ -6,7 +6,32 @@ TYRE_SOFT   = "Soft"
 TYRE_MEDIUM = "Medium"
 TYRE_HARD   = "Hard"
 
-VERKEHR_MALUS = {0: 2.0, 1: 1.5, 2: 1.0}
+# Verkehrsmalus bei Nicht-Pole – dynamisch aus Settings
+VERKEHR_MALUS_DEFAULT = {0: 2.0, 1: 1.5, 2: 1.0}
+VERKEHR_MALUS = VERKEHR_MALUS_DEFAULT.copy()
+
+
+def build_verkehr_malus(settings: dict) -> dict:
+    """
+    Runde 1: verkehr_aufschlag_s
+    Runde 2: verkehr_aufschlag_s - 0.5 (min 0)
+    Runde 3: verkehr_aufschlag_s - 1.0 (min 0)
+    """
+    try:
+        base = float(str(settings.get("verkehr_aufschlag_s", 2.0)).replace(",", "."))
+        return {
+            0: max(0.0, round(base, 2)),
+            1: max(0.0, round(base - 0.5, 2)),
+            2: max(0.0, round(base - 1.0, 2)),
+        }
+    except (ValueError, TypeError):
+        return VERKEHR_MALUS_DEFAULT.copy()
+
+
+def update_verkehr_malus(settings: dict):
+    """Legacy-Wrapper für Rückwärtskompatibilität."""
+    pass  # nicht mehr verwendet
+
 
 
 @dataclass
@@ -89,7 +114,10 @@ def evaluate_stints(
     fuel_per_lap, start_fuel, tank_size,
     tank_rate_l_per_s, pit_loss_s, pole, fuel_weight_s,
     pit_windows: list = None,
+    verkehr_malus: dict = None,
 ):
+    if verkehr_malus is None:
+        verkehr_malus = VERKEHR_MALUS_DEFAULT
     if pit_windows is None:
         pit_windows = []
 
@@ -107,7 +135,7 @@ def evaluate_stints(
 
             # Verkehrsmalus bei Nicht-Pole im ersten Stint
             if i == 0 and not pole:
-                malus = VERKEHR_MALUS.get(lap_total, 0.0)
+                malus = verkehr_malus.get(lap_total, 0.0)
                 if malus > 0:
                     if tyre == TYRE_SOFT:
                         t += malus
@@ -174,7 +202,7 @@ def _optimal_laps_for_sequence(
     tyre_seq, total_laps, max_laps, min_laps_pct,
     fuel_per_lap, start_fuel, tank_size,
     tank_rate_l_per_s, pit_loss_s, pole, fuel_weight_s,
-    tyre_times, pit_windows,
+    tyre_times, pit_windows, verkehr_malus,
 ) -> StrategyResult | None:
 
     n = len(tyre_seq)
@@ -199,7 +227,7 @@ def _optimal_laps_for_sequence(
                 stints, tyre_times, max_laps,
                 fuel_per_lap, start_fuel, tank_size,
                 tank_rate_l_per_s, pit_loss_s, pole, fuel_weight_s,
-                pit_windows,
+                pit_windows, verkehr_malus,
             )
             if v and (best is None or t < best.total_time_s):
                 desc = " → ".join(f"{l}x {ty}" for ty, l in stints)
@@ -249,7 +277,10 @@ def calculate_strategies(
     hard_allowed: bool = True,
     tyre_change_required: bool = True,
     pit_windows: list = None,
+    verkehr_malus: dict = None,
 ) -> list[StrategyResult]:
+    if verkehr_malus is not None:
+        pass  # wird weiter unten verwendet
 
     if pit_windows is None:
         pit_windows = []
@@ -300,6 +331,7 @@ def calculate_strategies(
     max_stops = math.ceil(total_laps / shortest_max) - 1
     max_stops = max(1, min(max_stops, 5))
 
+    verkehr_malus = verkehr_malus if verkehr_malus is not None else VERKEHR_MALUS_DEFAULT
     results = []
 
     for num_stops in range(0, max_stops + 1):
@@ -312,7 +344,7 @@ def calculate_strategies(
                 seq, total_laps, max_laps, min_laps_pct,
                 fuel_per_lap, start_fuel, tank_size,
                 tank_rate_l_per_s, pit_loss_s, pole, fuel_weight_s,
-                tyre_times, pit_windows,
+                tyre_times, pit_windows, verkehr_malus,
             )
             if best:
                 results.append(best)

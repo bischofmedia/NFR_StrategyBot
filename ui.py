@@ -2,7 +2,7 @@ import discord
 from discord.ui import Modal, TextInput, View, Button
 from strategy import (
     calculate_strategies, format_time, parse_pit_windows,
-    TYRE_SOFT, TYRE_MEDIUM, TYRE_HARD
+    build_verkehr_malus, TYRE_SOFT, TYRE_MEDIUM, TYRE_HARD
 )
 from sheets import (
     get_driver_data, save_driver_data, get_settings,
@@ -69,11 +69,17 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
 
     avg = get_driver_avg_pct(nickname, league)
 
-    if medium_s is None or medium_s <= 0:
+    # Plausibilitätscheck: Medium darf max 10% über Soft liegen, sonst Fallback
+    if medium_s is None or medium_s <= 0 or medium_s > soft_s * 1.10:
+        if medium_s and medium_s > soft_s * 1.10:
+            print(f"[Warnung] Medium-Zeit {medium_s:.3f}s unplausibel (Soft: {soft_s:.3f}s) – verwende Fallback")
         med_pct_val = avg["medium_pct"] if avg["medium_pct"] is not None else f("medium_default_pct", 1.0)
         medium_s = round(soft_s * (1 + med_pct_val / 100), 3)
 
-    if hard_allowed and (hard_s is None or hard_s <= 0):
+    # Plausibilitätscheck: Hard-Zeit darf max 20% über Soft liegen, sonst Fallback
+    if hard_allowed and (hard_s is None or hard_s <= 0 or hard_s > soft_s * 1.20):
+        if hard_s and hard_s > soft_s * 1.20:
+            print(f"[Warnung] Hard-Zeit {hard_s:.3f}s unplausibel (Soft: {soft_s:.3f}s) – verwende Fallback")
         hard_pct_val = avg["hard_pct"] if avg["hard_pct"] is not None else f("hard_default_pct", 2.5)
         hard_s = round(soft_s * (1 + hard_pct_val / 100), 3)
 
@@ -106,8 +112,9 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
         pit_windows=pit_windows,
     )
 
-    all_pole    = calculate_strategies(**common, pole=True)
-    all_no_pole = calculate_strategies(**common, pole=False)
+    vm = build_verkehr_malus(settings)
+    all_pole    = calculate_strategies(**common, pole=True, verkehr_malus=vm)
+    all_no_pole = calculate_strategies(**common, pole=False, verkehr_malus=vm)
 
     # Gemini oder Fallback
     gemini_result = None
@@ -397,12 +404,26 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
     avg = get_driver_avg_pct(nickname, league)
 
     if medium_s is None:
-        med_pct = avg["medium_pct"] if avg["medium_pct"] is not None else float(settings.get("medium_default_pct", 1.0))
+        raw_med_pct = avg["medium_pct"]
+        # Plausibilitätscheck: Medium_Pct darf max 10% sein
+        if raw_med_pct is not None and 0 < raw_med_pct <= 10:
+            med_pct = raw_med_pct
+        else:
+            if raw_med_pct is not None:
+                print(f"[Warnung] Medium_Pct {raw_med_pct} unplausibel – verwende Settings-Default")
+            med_pct = float(settings.get("medium_default_pct", 1.0))
         medium_s = round(soft_s * (1 + med_pct / 100), 3)
 
     hard_allowed = settings.get("hard_tyre_allowed", "FALSE").upper() == "TRUE"
     if hard_allowed and hard_s is None:
-        hard_pct_val = avg["hard_pct"] if avg["hard_pct"] is not None else float(settings.get("hard_default_pct", 2.5))
+        raw_pct = avg["hard_pct"]
+        # Plausibilitätscheck: Hard_Pct darf max 20% sein, sonst ist der Wert korrupt
+        if raw_pct is not None and 0 < raw_pct <= 20:
+            hard_pct_val = raw_pct
+        else:
+            if raw_pct is not None:
+                print(f"[Warnung] Hard_Pct {raw_pct} unplausibel – verwende Settings-Default")
+            hard_pct_val = float(settings.get("hard_default_pct", 2.5))
         hard_s = round(soft_s * (1 + hard_pct_val / 100), 3)
 
     data = {
