@@ -88,7 +88,8 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
         else:
             print(f"[Zeiten] Hard aus Daten: {hard_s:.3f}s")
     
-    print(f"[Zeiten] Soft={soft_s:.3f} Medium={medium_s:.3f} Hard={hard_s:.3f if hard_s else 'n/a'}")
+    hard_str = f"{hard_s:.3f}" if hard_s else "n/a"
+    print(f"[Zeiten] Soft={soft_s:.3f} Medium={medium_s:.3f} Hard={hard_str}")
 
     medium_pct = (medium_s - soft_s) / soft_s * 100
     hard_pct   = (hard_s - soft_s)   / soft_s * 100 if hard_s else 0
