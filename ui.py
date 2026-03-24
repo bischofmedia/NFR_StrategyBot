@@ -6,7 +6,8 @@ from strategy import (
 )
 from sheets import (
     get_driver_data, save_driver_data, get_settings,
-    get_track_data, get_driver_avg_pct, DEFAULT_LEAGUE
+    get_track_data, get_driver_avg_pct, DEFAULT_LEAGUE,
+    SRC_EINGABE, SRC_SETTINGS, SRC_AVERAGE, SRC_ZEITEN
 )
 from gemini import get_gemini_strategies, fallback_strategies
 from table import build_single_column
@@ -70,22 +71,28 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
 
     avg = get_driver_avg_pct(nickname, league)
 
-    # Plausibilitätscheck: Medium darf max 10% über Soft liegen, sonst Fallback
-    if medium_s is None or medium_s <= 0 or medium_s > soft_s * 1.10:
-        if medium_s and medium_s > soft_s * 1.10:
-            print(f"[Warnung] Medium-Zeit {medium_s:.3f}s unplausibel (Soft: {soft_s:.3f}s) – verwende Fallback")
+    # Medium: aus Daten oder Durchschnitt (nur Src=1) oder Settings
+    if medium_s is None or medium_s <= 0:
         med_pct_val = avg["medium_pct"] if avg["medium_pct"] is not None else f("medium_default_pct", 1.0)
         medium_s = round(soft_s * (1 + med_pct_val / 100), 3)
+        print(f"[Zeiten] Medium berechnet: Soft={soft_s:.3f} × (1 + {med_pct_val:.4f}/100) = {medium_s:.3f}")
+    else:
+        print(f"[Zeiten] Medium aus Daten: {medium_s:.3f}s")
 
-    # Plausibilitätscheck: Hard-Zeit darf max 20% über Soft liegen, sonst Fallback
-    if hard_allowed and (hard_s is None or hard_s <= 0 or hard_s > soft_s * 1.20):
-        if hard_s and hard_s > soft_s * 1.20:
-            print(f"[Warnung] Hard-Zeit {hard_s:.3f}s unplausibel (Soft: {soft_s:.3f}s) – verwende Fallback")
-        hard_pct_val = avg["hard_pct"] if avg["hard_pct"] is not None else f("hard_default_pct", 2.5)
-        hard_s = round(soft_s * (1 + hard_pct_val / 100), 3)
+    # Hard: aus Daten oder Durchschnitt (nur Src=1) oder Settings
+    if hard_allowed:
+        if hard_s is None or hard_s <= 0:
+            hard_pct_val = avg["hard_pct"] if avg["hard_pct"] is not None else f("hard_default_pct", 2.5)
+            hard_s = round(soft_s * (1 + hard_pct_val / 100), 3)
+            print(f"[Zeiten] Hard berechnet: Soft={soft_s:.3f} × (1 + {hard_pct_val:.4f}/100) = {hard_s:.3f}")
+        else:
+            print(f"[Zeiten] Hard aus Daten: {hard_s:.3f}s")
+    
+    print(f"[Zeiten] Soft={soft_s:.3f} Medium={medium_s:.3f} Hard={hard_s:.3f if hard_s else 'n/a'}")
 
     medium_pct = (medium_s - soft_s) / soft_s * 100
     hard_pct   = (hard_s - soft_s)   / soft_s * 100 if hard_s else 0
+    print(f"[Zeiten] Medium_pct={medium_pct:.4f}% Hard_pct={hard_pct:.4f}%")
 
     start_fuel   = tank_size * (start_pct / 100)
     fuel_per_lap = start_fuel / int(str(data["reichweite_70pct"]).replace(",",".").split(".")[0])
@@ -284,6 +291,24 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
             inline=True
         )
 
+    # Top-5 je Pole/Nicht-Pole
+    def top5_text(results, label):
+        lines = [f"**{label}**"]
+        shown = []
+        for r in results:
+            if r.description not in shown:
+                shown.append(r.description)
+                mins = int(r.total_time_s // 60)
+                secs = r.total_time_s % 60
+                lines.append(f"`{mins}:{secs:06.3f}` {r.description}")
+            if len(shown) == 5:
+                break
+        return "\n".join(lines)
+
+    pole_top5   = top5_text(all_pole,    "🏆 Pole")
+    nopole_top5 = top5_text(all_no_pole, "🏆 Nicht-Pole")
+    embed.add_field(name="Top 5 Strategien", value=f"{pole_top5}\n\n{nopole_top5}"[:1024], inline=False)
+
     for label in pole_labels:
         add_field(label, strategies.get(label))
     embed.add_field(name="\u200b", value="\u200b", inline=True)
@@ -306,24 +331,6 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
             embed.add_field(name="​", value="​", inline=True)
             embed.add_field(name="​", value="​", inline=True)
 
-
-    # Top-5 je Pole/Nicht-Pole
-    def top5_text(results, label):
-        lines = [f"**{label}**"]
-        shown = []
-        for r in results:
-            if r.description not in shown:
-                shown.append(r.description)
-                mins = int(r.total_time_s // 60)
-                secs = r.total_time_s % 60
-                lines.append(f"`{mins}:{secs:06.3f}` {r.description}")
-            if len(shown) == 5:
-                break
-        return "\n".join(lines)
-
-    pole_top5   = top5_text(all_pole,    "🏆 Pole")
-    nopole_top5 = top5_text(all_no_pole, "🏆 Nicht-Pole")
-    embed.add_field(name="Top 5 Strategien", value=f"{pole_top5}\n\n{nopole_top5}"[:1024], inline=False)
 
     if overall:
         embed.add_field(name=f"{ai_label} – Gesamtempfehlung", value=overall[:1024], inline=False)
@@ -421,34 +428,49 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
         medium_s = None
 
     avg = get_driver_avg_pct(nickname, league)
-
-    if medium_s is None:
-        raw_med_pct = avg["medium_pct"]
-        # Plausibilitätscheck: Medium_Pct darf max 10% sein
-        if raw_med_pct is not None and 0 < raw_med_pct <= 10:
-            med_pct = raw_med_pct
-        else:
-            if raw_med_pct is not None:
-                print(f"[Warnung] Medium_Pct {raw_med_pct} unplausibel – verwende Settings-Default")
-            med_pct = float(settings.get("medium_default_pct", 1.0))
-        medium_s = round(soft_s * (1 + med_pct / 100), 3)
-
     hard_allowed = settings.get("hard_tyre_allowed", "FALSE").upper() == "TRUE"
-    if hard_allowed and hard_s is None:
-        raw_pct = avg["hard_pct"]
-        # Plausibilitätscheck: Hard_Pct darf max 20% sein, sonst ist der Wert korrupt
-        if raw_pct is not None and 0 < raw_pct <= 20:
-            hard_pct_val = raw_pct
+
+    # Medium
+    if medium_s is not None:
+        medium_src = SRC_EINGABE
+        print(f"[Zeiten] Medium eingegeben: {medium_s:.3f}s")
+    else:
+        med_pct_val = avg["medium_pct"]
+        if med_pct_val is not None:
+            medium_src = SRC_AVERAGE
+            print(f"[Zeiten] Medium aus Durchschnitt: {med_pct_val:.4f}%")
         else:
-            if raw_pct is not None:
-                print(f"[Warnung] Hard_Pct {raw_pct} unplausibel – verwende Settings-Default")
-            hard_pct_val = float(settings.get("hard_default_pct", 2.5))
-        hard_s = round(soft_s * (1 + hard_pct_val / 100), 3)
+            med_pct_val = float(settings.get("medium_default_pct", 1.0))
+            medium_src = SRC_SETTINGS
+            print(f"[Zeiten] Medium aus Settings: {med_pct_val:.4f}%")
+        medium_s = round(soft_s * (1 + med_pct_val / 100), 3)
+        print(f"[Zeiten] Medium berechnet: {medium_s:.3f}s")
+
+    # Hard
+    if hard_allowed:
+        if hard_s is not None:
+            hard_src = SRC_EINGABE
+            print(f"[Zeiten] Hard eingegeben: {hard_s:.3f}s")
+        else:
+            hard_pct_val = avg["hard_pct"]
+            if hard_pct_val is not None:
+                hard_src = SRC_AVERAGE
+                print(f"[Zeiten] Hard aus Durchschnitt: {hard_pct_val:.4f}%")
+            else:
+                hard_pct_val = float(settings.get("hard_default_pct", 2.5))
+                hard_src = SRC_SETTINGS
+                print(f"[Zeiten] Hard aus Settings: {hard_pct_val:.4f}%")
+            hard_s = round(soft_s * (1 + hard_pct_val / 100), 3)
+            print(f"[Zeiten] Hard berechnet: {hard_s:.3f}s")
+    else:
+        hard_src = None
 
     data = {
         "zeit_soft_s": soft_s, "zeit_medium_s": medium_s,
         "zeit_hard_s": hard_s, "max_soft_runden": max_soft,
         "reichweite_70pct": reichweite,
+        "soft_src": SRC_EINGABE, "medium_src": medium_src,
+        "hard_src": hard_src if hard_allowed else None,
     }
     save_driver_data(nickname, track, version, brand, model, data, league)
 

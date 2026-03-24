@@ -12,8 +12,14 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-VALID_LEAGUES = ["rtc", "awl", "gtfun"]
-DEFAULT_LEAGUE = "rtc"
+VALID_LEAGUES   = ["rtc", "awl", "gtfun"]
+DEFAULT_LEAGUE  = "rtc"
+
+# Herkunft-Codes
+SRC_EINGABE   = 1  # manuell eingegeben
+SRC_SETTINGS  = 2  # aus Settings berechnet
+SRC_AVERAGE   = 3  # aus früheren Eingaben (Durchschnitt)
+SRC_ZEITEN    = 4  # aus der Zeiten-Tabelle
 
 
 def get_client():
@@ -70,13 +76,12 @@ def get_track_data(track: str, version: str) -> dict:
 
 
 # ─────────────────────────────────────────────
-# Settings (liga-abhängig)
+# Settings
 # ─────────────────────────────────────────────
 
 def get_settings(league: str = DEFAULT_LEAGUE) -> dict:
     league = normalise_league(league)
     sheet  = get_sheet()
-    # Versuche zuerst liga-spezifischen Tab, dann Legacy-Tab "Settings"
     for tab_name in [f"{league}_settings", "Settings"]:
         try:
             ws   = sheet.worksheet(tab_name)
@@ -92,13 +97,12 @@ def get_settings(league: str = DEFAULT_LEAGUE) -> dict:
 
 
 # ─────────────────────────────────────────────
-# Rennkalender (liga-abhängig)
+# Rennkalender
 # ─────────────────────────────────────────────
 
 def get_next_race(league: str = DEFAULT_LEAGUE) -> dict | None:
     league = normalise_league(league)
     sheet  = get_sheet()
-    # Versuche zuerst liga-spezifischen Tab, dann Legacy-Tab "Rennkalender"
     ws = None
     for tab_name in [f"{league}_rennkalender", "Rennkalender"]:
         try:
@@ -108,8 +112,8 @@ def get_next_race(league: str = DEFAULT_LEAGUE) -> dict | None:
             continue
     if ws is None:
         return None
-    rows   = ws.get_all_records()
-    today  = datetime.today().date()
+    rows  = ws.get_all_records()
+    today = datetime.today().date()
     upcoming = []
     for row in rows:
         try:
@@ -125,7 +129,7 @@ def get_next_race(league: str = DEFAULT_LEAGUE) -> dict | None:
 
 
 # ─────────────────────────────────────────────
-# Stammdaten: Marken + Modelle
+# Stammdaten
 # ─────────────────────────────────────────────
 
 def get_brands_and_models() -> dict:
@@ -148,8 +152,19 @@ def get_brands_and_models() -> dict:
 
 
 # ─────────────────────────────────────────────
-# Fahrerdaten (liga-abhängig)
+# Fahrerdaten
 # ─────────────────────────────────────────────
+
+# Spalten-Header mit Herkunfts-Spalten
+DRIVER_HEADERS = [
+    "Strecke", "Version", "Marke", "Modell",
+    "Zeit_Soft_s", "Soft_Src",
+    "Zeit_Medium_s", "Medium_Pct", "Medium_Src",
+    "Zeit_Hard_s", "Hard_Pct", "Hard_Src",
+    "Max_Soft_Runden", "Reichweite_70pct",
+    "Letzte_Aktualisierung"
+]
+
 
 def _driver_sheet_name(nickname: str, league: str) -> str:
     return f"{normalise_league(league)}_{nickname}"
@@ -159,7 +174,6 @@ def ensure_driver_sheet(nickname: str, league: str = DEFAULT_LEAGUE):
     sheet  = get_sheet()
     name   = _driver_sheet_name(nickname, league)
     titles = [ws.title for ws in sheet.worksheets()]
-    # Migriere alten Tab-Namen wenn vorhanden
     if name not in titles and nickname in titles:
         try:
             old_ws = sheet.worksheet(nickname)
@@ -169,13 +183,7 @@ def ensure_driver_sheet(nickname: str, league: str = DEFAULT_LEAGUE):
             pass
     if name not in titles:
         ws = sheet.add_worksheet(title=name, rows=500, cols=20)
-        ws.append_row([
-            "Strecke", "Version", "Marke", "Modell",
-            "Zeit_Soft_s", "Zeit_Medium_s", "Medium_Pct",
-            "Zeit_Hard_s", "Hard_Pct",
-            "Max_Soft_Runden", "Reichweite_70pct",
-            "Letzte_Aktualisierung"
-        ])
+        ws.append_row(DRIVER_HEADERS)
     return sheet.worksheet(name)
 
 
@@ -184,7 +192,6 @@ def get_driver_data(nickname: str, track: str, version: str,
     sheet  = get_sheet()
     name   = _driver_sheet_name(nickname, league)
     titles = [ws.title for ws in sheet.worksheets()]
-    # Fallback auf alten Tab-Namen (ohne Liga-Prefix)
     if name not in titles and nickname in titles:
         name = nickname
     if name not in titles:
@@ -201,30 +208,49 @@ def get_driver_data(nickname: str, track: str, version: str,
 
 
 def get_driver_avg_pct(nickname: str, league: str = DEFAULT_LEAGUE) -> dict:
+    """
+    Berechnet Durchschnitt nur aus Zeiten mit Src=1 (manuell eingegeben).
+    Fallback auf alle Zeiten wenn keine Src=1 vorhanden.
+    """
     sheet  = get_sheet()
     name   = _driver_sheet_name(nickname, league)
     titles = [ws.title for ws in sheet.worksheets()]
+    if name not in titles and nickname in titles:
+        name = nickname
     if name not in titles:
         return {"medium_pct": None, "hard_pct": None}
+
     ws   = sheet.worksheet(name)
     rows = ws.get_all_records(value_render_option='UNFORMATTED_VALUE')
-    medium_vals, hard_vals = [], []
+
+    med_entered, hard_entered = [], []  # Src=1
+    med_all, hard_all = [], []           # alle
+
     for row in rows:
-        try:
-            m = float(str(row.get("Medium_Pct", "")).replace(",", "."))
-            if m > 0:
-                medium_vals.append(m)
-        except (ValueError, TypeError):
-            pass
-        try:
-            h = float(str(row.get("Hard_Pct", "")).replace(",", "."))
-            if h > 0:
-                hard_vals.append(h)
-        except (ValueError, TypeError):
-            pass
+        def safe_float(v):
+            try: return float(str(v).replace(",", "."))
+            except: return None
+
+        m = safe_float(row.get("Medium_Pct"))
+        if m and 0 < m <= 10:
+            med_all.append(m)
+            if str(row.get("Medium_Src", "")).strip() == "1":
+                med_entered.append(m)
+
+        h = safe_float(row.get("Hard_Pct"))
+        if h and 0 < h <= 20:
+            hard_all.append(h)
+            if str(row.get("Hard_Src", "")).strip() == "1":
+                hard_entered.append(h)
+
+    med_pool  = med_entered  if med_entered  else med_all
+    hard_pool = hard_entered if hard_entered else hard_all
+
     return {
-        "medium_pct": round(sum(medium_vals)/len(medium_vals), 3) if medium_vals else None,
-        "hard_pct":   round(sum(hard_vals)/len(hard_vals),     3) if hard_vals   else None,
+        "medium_pct": round(sum(med_pool)/len(med_pool),   3) if med_pool  else None,
+        "hard_pct":   round(sum(hard_pool)/len(hard_pool), 3) if hard_pool else None,
+        "medium_src": SRC_AVERAGE if med_pool  else None,
+        "hard_src":   SRC_AVERAGE if hard_pool else None,
     }
 
 
@@ -235,24 +261,23 @@ def save_driver_data(nickname: str, track: str, version: str,
     rows = ws.get_all_records(value_render_option='UNFORMATTED_VALUE')
     now  = datetime.now(BERLIN).strftime("%d.%m.%Y %H:%M")
 
-    soft_s   = data["zeit_soft_s"]
-    medium_s = data["zeit_medium_s"]
-    hard_s   = data.get("zeit_hard_s")
+    def fp(v, d): return f"{float(v):.{d}f}" if v is not None and v != "" else ""
 
-    medium_pct = round((medium_s - soft_s) / soft_s * 100, 4) if medium_s else None
-    hard_pct   = round((hard_s   - soft_s) / soft_s * 100, 4) if hard_s   else None
+    soft_s     = data["zeit_soft_s"]
+    medium_s   = data["zeit_medium_s"]
+    hard_s     = data.get("zeit_hard_s")
+    soft_src   = data.get("soft_src",   SRC_EINGABE)
+    medium_src = data.get("medium_src", SRC_EINGABE)
+    hard_src   = data.get("hard_src",   SRC_EINGABE)
 
-    def fp(v, decimals):
-        """Float als String mit Punkt speichern – verhindert Locale-Komma in Google Sheets."""
-        return f"{float(v):.{decimals}f}" if v is not None and v != "" else ""
+    medium_pct = round((float(medium_s) - float(soft_s)) / float(soft_s) * 100, 4) if medium_s else None
+    hard_pct   = round((float(hard_s)   - float(soft_s)) / float(soft_s) * 100, 4) if hard_s   else None
 
     new_row = [
         track, version, brand, model,
-        fp(soft_s, 3),
-        fp(medium_s, 3) if medium_s else "",
-        fp(medium_pct, 4) if medium_pct is not None else "",
-        fp(hard_s, 3)    if hard_s   else "",
-        fp(hard_pct, 4)  if hard_pct is not None else "",
+        fp(soft_s, 3),   soft_src,
+        fp(medium_s, 3), fp(medium_pct, 4), medium_src,
+        fp(hard_s, 3),   fp(hard_pct, 4),   hard_src,
         int(data["max_soft_runden"]),
         int(data["reichweite_70pct"]),
         now
@@ -263,7 +288,7 @@ def save_driver_data(nickname: str, track: str, version: str,
                 and row.get("Version") == version
                 and row.get("Marke")   == brand
                 and row.get("Modell")  == model):
-            ws.update(f"A{i}:L{i}", [new_row])
+            ws.update(f"A{i}:O{i}", [new_row])
             return
 
     ws.append_row(new_row)
