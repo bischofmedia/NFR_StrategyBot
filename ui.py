@@ -38,7 +38,8 @@ def to_float(v):
 # ─────────────────────────────────────────────
 
 async def calculate_and_post(channel, nickname, track, version, brand, model,
-                              total_laps, data, settings, league=DEFAULT_LEAGUE):
+                              total_laps, data, settings, league=DEFAULT_LEAGUE,
+                              requester_id: int = 0):
     car_display = f"{brand} {model}"
 
     def s(key, default): return settings.get(key, str(default))
@@ -238,10 +239,10 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
         t = fmts(data.get("zeit_soft_s"))
         if t: tyre_parts.append(f"🔴 {t}")
     if medium_allowed:
-        t = fmts(data.get("zeit_medium_s"))
+        t = fmts(medium_s)  # bereits bereinigt
         if t: tyre_parts.append(f"🟡 {t}")
     if hard_allowed:
-        t = fmts(data.get("zeit_hard_s"))
+        t = fmts(hard_s)    # bereits bereinigt
         if t: tyre_parts.append(f"⚪ {t}")
 
     tyre_line = "  ".join(tyre_parts) if tyre_parts else "–"
@@ -306,27 +307,45 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
             embed.add_field(name="​", value="​", inline=True)
 
 
+    # Top-5 je Pole/Nicht-Pole
+    def top5_text(results, label):
+        lines = [f"**{label}**"]
+        shown = []
+        for r in results:
+            if r.description not in shown:
+                shown.append(r.description)
+                mins = int(r.total_time_s // 60)
+                secs = r.total_time_s % 60
+                lines.append(f"`{mins}:{secs:06.3f}` {r.description}")
+            if len(shown) == 5:
+                break
+        return "\n".join(lines)
+
+    pole_top5   = top5_text(all_pole,    "🏆 Pole")
+    nopole_top5 = top5_text(all_no_pole, "🏆 Nicht-Pole")
+    embed.add_field(name="Top 5 Strategien", value=f"{pole_top5}\n\n{nopole_top5}"[:1024], inline=False)
+
     if overall:
         embed.add_field(name=f"{ai_label} – Gesamtempfehlung", value=overall[:1024], inline=False)
 
     footer = f"NFR Strategy Bot • GT7 • {'Gemini 2.5 Flash' if used_gemini else 'Fallback-Algorithmus'}"
     embed.set_footer(text=footer)
 
-    detail_msg = (
-        "**Detailansicht:** Wähle eine Strategie für die Runde-für-Runde Aufschlüsselung, "
-        "oder klicke **Keine Anzeige** um zu beenden."
-    )
-    view = DetailSelectView(
-        strategies=strategies,
-        channel=channel,
+    table_params = dict(
         base_soft_s=soft_s, medium_plus_pct=medium_pct, hard_plus_pct=hard_pct,
         max_soft_runden=max_soft,
         fuel_per_lap=fuel_per_lap, start_fuel=start_fuel,
         tank_size=tank_size, tank_rate_l_per_s=tank_rate,
         pit_loss_s=pit_loss, fuel_weight_s=fw_s,
     )
+
+    # Pole/Nicht-Pole Auswahl – nur für den Anfragenden sichtbar (ephemeral via DM-ähnliche Struktur)
+    pole_view   = PoleSelectView(all_pole,    channel, table_params, requester_id)
+    nopole_view = PoleSelectView(all_no_pole, channel, table_params, requester_id)
+    detail_view = PoleChoiceView(pole_view, nopole_view, requester_id)
+
     await channel.send(embed=embed)
-    await channel.send(detail_msg, view=view)
+    await channel.send("**Detailansicht:** Wähle Pole oder Nicht-Pole:", view=detail_view)
 
 
 # ─────────────────────────────────────────────
@@ -511,7 +530,8 @@ class ConfirmDataView(View):
             "max_soft_runden":  ex.get("Max_Soft_Runden", 13),
             "reichweite_70pct": ex.get("Reichweite_70pct", 15),
         }
-        await calculate_and_post(ch, n, tr, v, br, mo, l, data, settings, league)
+        await calculate_and_post(ch, n, tr, v, br, mo, l, data, settings, league,
+                                   requester_id=interaction.user.id)
         try:
             await interaction.edit_original_response(content="​", embed=None, view=None)
         except Exception:
@@ -608,4 +628,117 @@ class DetailSelectView(discord.ui.View):
             )
             await self.channel.send("Weitere Detailansicht:", view=new_view)
             self.stop()
+        return callback
+
+
+# ─────────────────────────────────────────────
+# Zweistufige Detail-Auswahl
+# ─────────────────────────────────────────────
+
+class PoleChoiceView(discord.ui.View):
+    """Erste Stufe: Pole oder Nicht-Pole wählen."""
+    def __init__(self, pole_view, nopole_view, requester_id: int):
+        super().__init__(timeout=300)
+        self.pole_view    = pole_view
+        self.nopole_view  = nopole_view
+        self.requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.requester_id and interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "Diese Auswahl ist nur für denjenigen, der die Strategie angefordert hat.",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="🏁 Pole", style=discord.ButtonStyle.primary)
+    async def pole(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.pole_view.back_view = self
+        await interaction.response.edit_message(
+            content="**Pole** – wähle eine Strategie für die Detailansicht:",
+            view=self.pole_view
+        )
+
+    @discord.ui.button(label="🚦 Nicht-Pole", style=discord.ButtonStyle.secondary)
+    async def nopole(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.nopole_view.back_view = self
+        await interaction.response.edit_message(
+            content="**Nicht-Pole** – wähle eine Strategie für die Detailansicht:",
+            view=self.nopole_view
+        )
+
+
+class PoleSelectView(discord.ui.View):
+    """Zweite Stufe: Top-5 Strategien zur Auswahl."""
+    def __init__(self, results, channel, table_params, requester_id: int):
+        super().__init__(timeout=300)
+        self.channel      = channel
+        self.table_params = table_params
+        self.requester_id = requester_id
+        self.results      = results
+        self.back_view    = None  # wird von PoleChoiceView gesetzt
+
+        # Top-5 eindeutige Strategien als Buttons
+        seen = []
+        for r in results:
+            if r.description not in seen:
+                seen.append(r.description)
+            if len(seen) == 5:
+                break
+
+        for i, desc in enumerate(seen):
+            result = next(x for x in results if x.description == desc)
+            mins   = int(result.total_time_s // 60)
+            secs   = result.total_time_s % 60
+            label  = f"{mins}:{secs:06.3f} {self._short(result)}"[:80]
+            btn    = discord.ui.Button(label=label, style=discord.ButtonStyle.primary, row=i // 2)
+            btn.callback = self._make_callback(result)
+            self.add_item(btn)
+
+        back_btn = discord.ui.Button(label="← Zurück", style=discord.ButtonStyle.secondary, row=2)
+        back_btn.callback = self._back
+        self.add_item(back_btn)
+
+    def _short(self, result):
+        return "-".join(f"{n}{t[0]}" for t, n in result.stints)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.requester_id and interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "Diese Auswahl ist nur für denjenigen, der die Strategie angefordert hat.",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    async def _back(self, interaction: discord.Interaction):
+        if self.back_view:
+            await interaction.response.edit_message(
+                content="**Detailansicht:** Wähle Pole oder Nicht-Pole:",
+                view=self.back_view
+            )
+        else:
+            await interaction.response.defer()
+
+    def _make_callback(self, result):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            table = build_single_column(result.description, result,
+                                        pole=result.pole,
+                                        **self.table_params)
+            lines = table.split("\n")
+            chunk = "```\n"
+            for line in lines:
+                if len(chunk) + len(line) + 2 > 1950:
+                    await self.channel.send(chunk + "```")
+                    chunk = "```\n" + line + "\n"
+                else:
+                    chunk += line + "\n"
+            await self.channel.send(chunk + "```")
+            # Zurück zur Strategieauswahl
+            await interaction.edit_original_response(
+                content="Weitere Detailansicht:",
+                view=self
+            )
         return callback
