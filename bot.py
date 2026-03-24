@@ -261,7 +261,8 @@ async def proceed_to_car(interaction, nickname, track, version, total_laps,
             prefill = build_prefill(0, nickname, settings, hard_allowed, league=league)
             modal   = make_modal(
                 nickname, track, version, brand, model,
-                total_laps, channel, league, prefill=prefill
+                total_laps, channel, False, league, prefill=prefill,
+                settings=settings
             )
             await interaction.edit_original_response(
                 content="Bitte gib deine Zeiten ein:",

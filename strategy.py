@@ -63,8 +63,18 @@ def soft_lap_times(base, max_laps):   return _deg_curve(base, max_laps)
 def medium_lap_times(base, max_laps): return _deg_curve(base, max_laps)
 def hard_lap_times(base, max_laps):   return _deg_curve(base, max_laps)
 
-def fuel_weight_delta(fuel, tank_size, fw_s):
-    return (fuel / tank_size) * fw_s
+def fuel_weight_delta(fuel, tank_size, fw_s, base_time_s=None):
+    """
+    fw_s kann entweder Sekunden (>1) oder Prozent (<1) sein.
+    Bei Prozent: Aufschlag = base_time_s * fw_s/100 * (fuel/tank_size)
+    Bei Sekunden: Aufschlag = fw_s * (fuel/tank_size)  [Legacy]
+    """
+    if base_time_s is not None and fw_s < 1.0:
+        # Prozentwert: relativ zur Rundenzeit
+        return base_time_s * (fw_s / 100) * (fuel / tank_size)
+    else:
+        # Sekundenwert (Legacy oder fw_s >= 1)
+        return (fuel / tank_size) * fw_s
 
 
 # ─────────────────────────────────────────────
