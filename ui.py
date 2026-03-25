@@ -261,10 +261,12 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
     # Startsprit-Prozent aus Settings für Reichweiten-Label
     start_pct_disp = int(float(settings.get("start_fuel_pct", 70)))
 
+    pit_loss_disp = int(round(pit_loss))
     data_line = (
         f"{tyre_line}\n"
         f"Maximale Runden Soft: **{max_soft_disp}**  |  "
-        f"Tank {start_pct_disp}% reicht für **{reich_disp} Runden**"
+        f"Tank {start_pct_disp}% reicht für **{reich_disp} Runden**  |  "
+        f"Zeit Reifenwechsel: **{pit_loss_disp}s**"
     )
 
     embed = discord.Embed(
@@ -351,19 +353,40 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
     mono_pole   = strategies.get("Pole – Schnellster Reifen")
     mono_nopole = strategies.get("Nicht-Pole – Schnellster Reifen")
 
-    # Pole/Nicht-Pole Auswahl – nur für den Anfragenden sichtbar (ephemeral via DM-ähnliche Struktur)
-    pole_view        = PoleSelectView(all_pole,    channel, table_params, requester_id)
-    nopole_view      = PoleSelectView(all_no_pole, channel, table_params, requester_id)
-    mono_pole_view   = MonoTyreView(mono_pole,   channel, table_params, requester_id) if mono_pole   else None
-    mono_nopole_view = MonoTyreView(mono_nopole, channel, table_params, requester_id) if mono_nopole else None
-    detail_view = PoleChoiceView(
-        pole_view, nopole_view,
-        mono_pole_view, mono_nopole_view,
-        requester_id,
+    # Kontext für benutzerdefinierte Strategie
+    race_context = dict(
+        total_laps=total_laps,
+        max_soft=max_soft,
+        fuel_per_lap=fuel_per_lap,
+        start_fuel=start_fuel,
+        tank_size=tank_size,
+        tank_rate=tank_rate,
+        pit_loss=pit_loss,
+        fw_s=fw_s,
+        soft_s=soft_s,
+        medium_pct=medium_pct,
+        hard_pct=hard_pct,
+        soft_allowed=soft_allowed,
+        medium_allowed=medium_allowed,
+        hard_allowed=hard_allowed,
+        vm=vm,
     )
 
+    # Zweite-Ebene-Views (Top5 + Mono + Custom) je Pole / Nicht-Pole
+    pole_select   = StartVariantView(
+        all_pole,    mono_pole,   channel, table_params, race_context,
+        pole=True,   requester_id=requester_id
+    )
+    nopole_select = StartVariantView(
+        all_no_pole, mono_nopole, channel, table_params, race_context,
+        pole=False,  requester_id=requester_id
+    )
+
+    # Erste-Ebene-View
+    detail_view = PoleChoiceView(pole_select, nopole_select, requester_id)
+
     await channel.send(embed=embed)
-    await channel.send("**Detailansicht:** Wähle Pole oder Nicht-Pole:", view=detail_view)
+    await channel.send("**Detailansicht:** Wähle deine Startposition:", view=detail_view)
 
 
 # ─────────────────────────────────────────────
@@ -668,212 +691,336 @@ class DetailSelectView(discord.ui.View):
 # Zweistufige Detail-Auswahl
 # ─────────────────────────────────────────────
 
-class MonoTyreView(discord.ui.View):
-    """Detailansicht für die Schnellster-Reifen-Strategie (ein Button + Zurück)."""
-    def __init__(self, result, channel, table_params, requester_id: int):
-        super().__init__(timeout=300)
-        self.result       = result
-        self.channel      = channel
-        self.table_params = table_params
-        self.requester_id = requester_id
-        self.back_view    = None  # wird von PoleChoiceView gesetzt
-
-        if result:
-            mins  = int(result.total_time_s // 60)
-            secs  = result.total_time_s % 60
-            short = "-".join(f"{n}{t[0]}" for t, n in result.stints)
-            label = f"{mins}:{secs:06.3f} {short}"[:80]
-            btn   = discord.ui.Button(label=label, style=discord.ButtonStyle.success, row=0)
-            btn.callback = self._show_detail
-            self.add_item(btn)
-
-        back_btn = discord.ui.Button(label="← Zurück", style=discord.ButtonStyle.secondary, row=1)
-        back_btn.callback = self._back
-        self.add_item(back_btn)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if self.requester_id and interaction.user.id != self.requester_id:
-            await interaction.response.send_message(
-                "Diese Auswahl ist nur für denjenigen, der die Strategie angefordert hat.",
-                ephemeral=True
-            )
-            return False
-        return True
-
-    async def _show_detail(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        table = build_single_column(
-            self.result.description, self.result,
-            pole=self.result.pole,
-            **self.table_params
-        )
-        lines = table.split("\n")
+def _send_table(channel, result, table_params, pole: bool):
+    """Hilfsfunktion: gibt Coroutine zurück die Tabelle in channel postet."""
+    import asyncio
+    table = build_single_column(result.description, result, pole=pole, **table_params)
+    async def _do(ch, tbl):
+        lines = tbl.split("\n")
         chunk = "```\n"
         for line in lines:
             if len(chunk) + len(line) + 2 > 1950:
-                await self.channel.send(chunk + "```")
+                await ch.send(chunk + "```")
                 chunk = "```\n" + line + "\n"
             else:
                 chunk += line + "\n"
-        await self.channel.send(chunk + "```")
-        await interaction.edit_original_response(
-            content="Weitere Detailansicht:",
-            view=self
-        )
+        await ch.send(chunk + "```")
+    return _do(channel, table)
 
-    async def _back(self, interaction: discord.Interaction):
-        if self.back_view:
-            await interaction.response.edit_message(
-                content="**Detailansicht:** Wähle eine Kategorie:",
-                view=self.back_view
-            )
-        else:
-            await interaction.response.defer()
 
+# ── Ebene 1: Start von der Pole / Start von Hinten ────────────────────────
 
 class PoleChoiceView(discord.ui.View):
-    """Erste Stufe: Pole oder Nicht-Pole wählen, inkl. Mono-Reifen-Varianten."""
-    def __init__(self, pole_view, nopole_view,
-                 mono_pole_view, mono_nopole_view,
-                 requester_id: int):
+    """Erste Ebene: Startposition wählen."""
+    def __init__(self, pole_select_view, nopole_select_view, requester_id: int):
         super().__init__(timeout=300)
-        self.pole_view        = pole_view
-        self.nopole_view      = nopole_view
-        self.mono_pole_view   = mono_pole_view
-        self.mono_nopole_view = mono_nopole_view
-        self.requester_id     = requester_id
+        self.pole_select_view   = pole_select_view
+        self.nopole_select_view = nopole_select_view
+        self.requester_id       = requester_id
 
-        # Buttons dynamisch hinzufügen damit sie nur erscheinen wenn Daten vorhanden
-        pole_btn = discord.ui.Button(
-            label="🏁 Pole – Top 5", style=discord.ButtonStyle.primary, row=0)
-        pole_btn.callback = self._pole_callback
-        self.add_item(pole_btn)
+        btn_pole = discord.ui.Button(
+            label="🏁 Start von der Pole", style=discord.ButtonStyle.primary, row=0)
+        btn_pole.callback = self._pole_cb
+        self.add_item(btn_pole)
 
-        nopole_btn = discord.ui.Button(
-            label="🚦 Nicht-Pole – Top 5", style=discord.ButtonStyle.secondary, row=0)
-        nopole_btn.callback = self._nopole_callback
-        self.add_item(nopole_btn)
-
-        if mono_pole_view:
-            mono_pole_btn = discord.ui.Button(
-                label="🏁 Pole – Schnellster Reifen", style=discord.ButtonStyle.primary, row=1)
-            mono_pole_btn.callback = self._mono_pole_callback
-            self.add_item(mono_pole_btn)
-
-        if mono_nopole_view:
-            mono_nopole_btn = discord.ui.Button(
-                label="🚦 Nicht-Pole – Schnellster Reifen", style=discord.ButtonStyle.secondary, row=1)
-            mono_nopole_btn.callback = self._mono_nopole_callback
-            self.add_item(mono_nopole_btn)
+        btn_nopole = discord.ui.Button(
+            label="🚦 Start von Hinten", style=discord.ButtonStyle.secondary, row=0)
+        btn_nopole.callback = self._nopole_cb
+        self.add_item(btn_nopole)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.requester_id and interaction.user.id != self.requester_id:
             await interaction.response.send_message(
                 "Diese Auswahl ist nur für denjenigen, der die Strategie angefordert hat.",
-                ephemeral=True
-            )
+                ephemeral=True)
             return False
         return True
 
-    async def _pole_callback(self, interaction: discord.Interaction):
-        self.pole_view.back_view = self
+    async def _pole_cb(self, interaction: discord.Interaction):
+        self.pole_select_view.back_view = self
         await interaction.response.edit_message(
-            content="**Pole – Top 5** – wähle eine Strategie für die Detailansicht:",
-            view=self.pole_view
-        )
+            content="**Start von der Pole** – wähle eine Strategie:",
+            view=self.pole_select_view)
 
-    async def _nopole_callback(self, interaction: discord.Interaction):
-        self.nopole_view.back_view = self
+    async def _nopole_cb(self, interaction: discord.Interaction):
+        self.nopole_select_view.back_view = self
         await interaction.response.edit_message(
-            content="**Nicht-Pole – Top 5** – wähle eine Strategie für die Detailansicht:",
-            view=self.nopole_view
-        )
-
-    async def _mono_pole_callback(self, interaction: discord.Interaction):
-        self.mono_pole_view.back_view = self
-        await interaction.response.edit_message(
-            content="**Pole – Schnellster Reifen** – Detailansicht:",
-            view=self.mono_pole_view
-        )
-
-    async def _mono_nopole_callback(self, interaction: discord.Interaction):
-        self.mono_nopole_view.back_view = self
-        await interaction.response.edit_message(
-            content="**Nicht-Pole – Schnellster Reifen** – Detailansicht:",
-            view=self.mono_nopole_view
-        )
+            content="**Start von Hinten** – wähle eine Strategie:",
+            view=self.nopole_select_view)
 
 
-class PoleSelectView(discord.ui.View):
-    """Zweite Stufe: Top-5 Strategien zur Auswahl."""
-    def __init__(self, results, channel, table_params, requester_id: int):
+# ── Ebene 2: Top5 / Schnellster Reifen / Benutzerdefiniert ────────────────
+
+class StartVariantView(discord.ui.View):
+    """Zweite Ebene: Top-5, Schnellster Reifen, Benutzerdefiniert."""
+    def __init__(self, results, mono_result, channel, table_params,
+                 race_context: dict, pole: bool, requester_id: int):
         super().__init__(timeout=300)
+        self.results      = results
+        self.mono_result  = mono_result
         self.channel      = channel
         self.table_params = table_params
+        self.race_context = race_context
+        self.pole         = pole
         self.requester_id = requester_id
-        self.results      = results
-        self.back_view    = None  # wird von PoleChoiceView gesetzt
+        self.back_view    = None  # gesetzt von PoleChoiceView
 
-        # Top-5 eindeutige Strategien als Buttons
+        # Top-5 Buttons (Zeilen 0+1)
         seen = []
         for r in results:
             if r.description not in seen:
                 seen.append(r.description)
             if len(seen) == 5:
                 break
-
         for i, desc in enumerate(seen):
-            result = next(x for x in results if x.description == desc)
-            mins   = int(result.total_time_s // 60)
-            secs   = result.total_time_s % 60
-            label  = f"{mins}:{secs:06.3f} {self._short(result)}"[:80]
-            btn    = discord.ui.Button(label=label, style=discord.ButtonStyle.primary, row=i // 2)
-            btn.callback = self._make_callback(result)
+            r     = next(x for x in results if x.description == desc)
+            mins  = int(r.total_time_s // 60)
+            secs  = r.total_time_s % 60
+            short = "-".join(f"{n}{t[0]}" for t, n in r.stints)
+            lbl   = f"{mins}:{secs:06.3f} {short}"[:80]
+            btn   = discord.ui.Button(label=lbl, style=discord.ButtonStyle.primary, row=i // 2)
+            btn.callback = self._make_top5_cb(r)
             self.add_item(btn)
 
-        back_btn = discord.ui.Button(label="← Zurück", style=discord.ButtonStyle.secondary, row=2)
-        back_btn.callback = self._back
-        self.add_item(back_btn)
+        # Schnellster-Reifen Button (Zeile 2, nur wenn vorhanden)
+        if mono_result:
+            mins  = int(mono_result.total_time_s // 60)
+            secs  = mono_result.total_time_s % 60
+            short = "-".join(f"{n}{t[0]}" for t, n in mono_result.stints)
+            lbl   = f"🏅 Schnellster Reifen  {mins}:{secs:06.3f} {short}"[:80]
+            btn_mono = discord.ui.Button(label=lbl, style=discord.ButtonStyle.success, row=2)
+            btn_mono.callback = self._mono_cb
+            self.add_item(btn_mono)
 
-    def _short(self, result):
-        return "-".join(f"{n}{t[0]}" for t, n in result.stints)
+        # Benutzerdefiniert Button (Zeile 3)
+        btn_custom = discord.ui.Button(
+            label="✏️ Benutzerdefiniert", style=discord.ButtonStyle.secondary, row=3)
+        btn_custom.callback = self._custom_cb
+        self.add_item(btn_custom)
+
+        # Zurück Button (Zeile 4)
+        btn_back = discord.ui.Button(
+            label="← Zurück", style=discord.ButtonStyle.danger, row=4)
+        btn_back.callback = self._back_cb
+        self.add_item(btn_back)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.requester_id and interaction.user.id != self.requester_id:
             await interaction.response.send_message(
                 "Diese Auswahl ist nur für denjenigen, der die Strategie angefordert hat.",
-                ephemeral=True
-            )
+                ephemeral=True)
             return False
         return True
 
-    async def _back(self, interaction: discord.Interaction):
+    def _make_top5_cb(self, result):
+        async def cb(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            await _send_table(self.channel, result, self.table_params, self.pole)
+            await interaction.edit_original_response(
+                content="Weitere Detailansicht:", view=self)
+        return cb
+
+    async def _mono_cb(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await _send_table(self.channel, self.mono_result, self.table_params, self.pole)
+        await interaction.edit_original_response(
+            content="Weitere Detailansicht:", view=self)
+
+    async def _custom_cb(self, interaction: discord.Interaction):
+        ctx = self.race_context
+        modal = CustomStrategyModal(
+            channel=self.channel,
+            table_params=self.table_params,
+            race_context=ctx,
+            pole=self.pole,
+            back_view=self,
+        )
+        await interaction.response.send_modal(modal)
+
+    async def _back_cb(self, interaction: discord.Interaction):
         if self.back_view:
             await interaction.response.edit_message(
-                content="**Detailansicht:** Wähle Pole oder Nicht-Pole:",
-                view=self.back_view
-            )
+                content="**Detailansicht:** Wähle deine Startposition:",
+                view=self.back_view)
         else:
             await interaction.response.defer()
 
-    def _make_callback(self, result):
-        async def callback(interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=True)
-            table = build_single_column(result.description, result,
-                                        pole=result.pole,
-                                        **self.table_params)
-            lines = table.split("\n")
-            chunk = "```\n"
-            for line in lines:
-                if len(chunk) + len(line) + 2 > 1950:
-                    await self.channel.send(chunk + "```")
-                    chunk = "```\n" + line + "\n"
-                else:
-                    chunk += line + "\n"
-            await self.channel.send(chunk + "```")
-            # Zurück zur Strategieauswahl
-            await interaction.edit_original_response(
-                content="Weitere Detailansicht:",
-                view=self
-            )
-        return callback
+
+# ── Benutzerdefinierte Strategie ──────────────────────────────────────────
+
+class CustomStrategyModal(Modal, title="Benutzerdefinierte Strategie"):
+    """
+    Eingabe-Format: Stint pro Zeile oder kommagetrennt, z.B.
+        12S, 10M
+    oder
+        12S
+        10M
+        8H
+    Reifen: S=Soft, M=Medium, H=Hard
+    """
+    stints_input = TextInput(
+        label="Stints (z.B. 12S, 10M  oder  12S / 10M / 8H)",
+        placeholder="Format: RundenzahlReifentyp  –  z.B. 12S, 18M",
+        style=discord.TextStyle.short,
+        required=True,
+        max_length=100,
+    )
+
+    def __init__(self, channel, table_params, race_context, pole: bool, back_view):
+        super().__init__()
+        self.channel      = channel
+        self.table_params = table_params
+        self.race_context = race_context
+        self.pole         = pole
+        self.back_view    = back_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = str(self.stints_input).strip()
+        await _handle_custom_strategy(interaction, raw,
+                                      self.channel, self.table_params,
+                                      self.race_context, self.pole,
+                                      self.back_view)
+
+
+def _parse_custom_stints(raw: str) -> list | None:
+    """
+    Parst Stint-Eingabe. Akzeptiert Trennzeichen: Komma, Slash, Newline, Semikolon.
+    Rückgabe: [(tyre_str, laps), ...] oder None bei Fehler.
+    """
+    import re
+    tyre_map = {"S": TYRE_SOFT, "M": TYRE_MEDIUM, "H": TYRE_HARD}
+    parts = re.split(r"[,;/\n\r]+", raw)
+    stints = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        m = re.fullmatch(r"(\d+)\s*([SsMmHh])", p)
+        if not m:
+            return None
+        laps = int(m.group(1))
+        tyre = tyre_map[m.group(2).upper()]
+        stints.append((tyre, laps))
+    return stints if stints else None
+
+
+async def _handle_custom_strategy(interaction, raw, channel, table_params,
+                                   race_context, pole, back_view):
+    stints = _parse_custom_stints(raw)
+
+    if stints is None:
+        await interaction.response.send_message(
+            "❌ **Ungültiges Format.**\n"
+            "Bitte so eingeben: `12S, 10M` oder `12S / 10M / 8H`\n"
+            "Reifenkürzel: **S** = Soft, **M** = Medium, **H** = Hard",
+            ephemeral=True)
+        return
+
+    ctx          = race_context
+    total_laps   = ctx["total_laps"]
+    max_soft     = ctx["max_soft"]
+    fuel_per_lap = ctx["fuel_per_lap"]
+    start_fuel   = ctx["start_fuel"]
+    tank_size    = ctx["tank_size"]
+    soft_allowed   = ctx["soft_allowed"]
+    medium_allowed = ctx["medium_allowed"]
+    hard_allowed   = ctx["hard_allowed"]
+
+    max_laps_map = {
+        TYRE_SOFT:   max_soft,
+        TYRE_MEDIUM: max_soft * 2,
+        TYRE_HARD:   max_soft * 4,
+    }
+
+    errors = []
+
+    # Rundenzahl prüfen
+    entered_laps = sum(n for _, n in stints)
+    if entered_laps != total_laps:
+        errors.append(
+            f"❌ Rundenzahl stimmt nicht: {entered_laps} eingegeben, "
+            f"aber das Rennen hat **{total_laps} Runden**.")
+
+    # Reifentypen erlaubt?
+    for tyre, _ in stints:
+        if tyre == TYRE_SOFT   and not soft_allowed:
+            errors.append(f"❌ Soft-Reifen sind in dieser Liga nicht erlaubt.")
+        if tyre == TYRE_MEDIUM and not medium_allowed:
+            errors.append(f"❌ Medium-Reifen sind in dieser Liga nicht erlaubt.")
+        if tyre == TYRE_HARD   and not hard_allowed:
+            errors.append(f"❌ Hard-Reifen sind in dieser Liga nicht erlaubt.")
+
+    # Max. Runden pro Reifen prüfen
+    for tyre, laps in stints:
+        max_t = max_laps_map.get(tyre, 999)
+        if laps > max_t:
+            errors.append(
+                f"❌ {laps} Runden auf **{tyre}** nicht möglich "
+                f"(max. {max_t} Runden).")
+
+    # Kraftstoff-Reichweite prüfen: simuliere stint-weise
+    fuel = start_fuel
+    for i, (tyre, laps) in enumerate(stints):
+        fuel_needed = laps * fuel_per_lap
+        if i > 0:
+            # Nach Boxenstopp: tank soweit wie nötig auf
+            refuel = min(fuel_needed - fuel, tank_size - fuel)
+            if refuel > 0:
+                fuel += refuel
+        fuel_after = fuel - fuel_needed
+        if fuel_after < -0.01:
+            errors.append(
+                f"❌ Stint {i+1} ({laps}× {tyre}): "
+                f"nicht genug Sprit (benötigt {fuel_needed:.1f}l, "
+                f"verfügbar {max(fuel, 0):.1f}l).")
+        fuel = max(fuel_after, 0)
+
+    if errors:
+        msg = "**Plausibilitätsprüfung fehlgeschlagen:**\n" + "\n".join(errors)
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+
+    # Strategie berechnen & Tabelle ausgeben
+    from strategy import StrategyResult, evaluate_stints, soft_lap_times, medium_lap_times, hard_lap_times
+    base_soft_s    = table_params["base_soft_s"]
+    medium_pct     = table_params["medium_plus_pct"]
+    hard_pct_val   = table_params["hard_plus_pct"]
+    fw_s           = table_params["fuel_weight_s"]
+    pit_loss       = table_params["pit_loss_s"]
+    tank_rate      = ctx["tank_rate"]
+
+    base_medium = base_soft_s * (1 + medium_pct / 100)
+    base_hard   = base_soft_s * (1 + hard_pct_val / 100)
+    tyre_times  = {
+        TYRE_SOFT:   soft_lap_times(base_soft_s,  max_laps_map[TYRE_SOFT]),
+        TYRE_MEDIUM: medium_lap_times(base_medium, max_laps_map[TYRE_MEDIUM]),
+        TYRE_HARD:   hard_lap_times(base_hard,     max_laps_map[TYRE_HARD]),
+    }
+
+    total_t, fuel_stops, valid = evaluate_stints(
+        stints, tyre_times, max_laps_map,
+        fuel_per_lap, start_fuel, tank_size,
+        tank_rate, pit_loss, pole, fw_s,
+        pit_windows=[], verkehr_malus=ctx["vm"],
+    )
+
+    if not valid or total_t is None:
+        await interaction.response.send_message(
+            "❌ Strategie konnte nicht berechnet werden "
+            "(Kraftstoff reicht nicht aus).", ephemeral=True)
+        return
+
+    desc = " → ".join(f"{l}× {t}" for t, l in stints)
+    result = StrategyResult(
+        stints=stints,
+        total_time_s=total_t,
+        pit_stops=len(stints) - 1,
+        fuel_stops=fuel_stops or [],
+        description=desc,
+        pole=pole,
+    )
+
+    await interaction.response.defer(ephemeral=True)
+    await _send_table(channel, result, table_params, pole)
+    await interaction.edit_original_response(
+        content="Weitere Detailansicht:", view=back_view)
