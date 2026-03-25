@@ -347,10 +347,20 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
         pit_loss_s=pit_loss, fuel_weight_s=fw_s,
     )
 
+    # Mono-Reifen-Ergebnisse aus strategies holen
+    mono_pole   = strategies.get("Pole – Schnellster Reifen")
+    mono_nopole = strategies.get("Nicht-Pole – Schnellster Reifen")
+
     # Pole/Nicht-Pole Auswahl – nur für den Anfragenden sichtbar (ephemeral via DM-ähnliche Struktur)
-    pole_view   = PoleSelectView(all_pole,    channel, table_params, requester_id)
-    nopole_view = PoleSelectView(all_no_pole, channel, table_params, requester_id)
-    detail_view = PoleChoiceView(pole_view, nopole_view, requester_id)
+    pole_view        = PoleSelectView(all_pole,    channel, table_params, requester_id)
+    nopole_view      = PoleSelectView(all_no_pole, channel, table_params, requester_id)
+    mono_pole_view   = MonoTyreView(mono_pole,   channel, table_params, requester_id) if mono_pole   else None
+    mono_nopole_view = MonoTyreView(mono_nopole, channel, table_params, requester_id) if mono_nopole else None
+    detail_view = PoleChoiceView(
+        pole_view, nopole_view,
+        mono_pole_view, mono_nopole_view,
+        requester_id,
+    )
 
     await channel.send(embed=embed)
     await channel.send("**Detailansicht:** Wähle Pole oder Nicht-Pole:", view=detail_view)
@@ -658,13 +668,28 @@ class DetailSelectView(discord.ui.View):
 # Zweistufige Detail-Auswahl
 # ─────────────────────────────────────────────
 
-class PoleChoiceView(discord.ui.View):
-    """Erste Stufe: Pole oder Nicht-Pole wählen."""
-    def __init__(self, pole_view, nopole_view, requester_id: int):
+class MonoTyreView(discord.ui.View):
+    """Detailansicht für die Schnellster-Reifen-Strategie (ein Button + Zurück)."""
+    def __init__(self, result, channel, table_params, requester_id: int):
         super().__init__(timeout=300)
-        self.pole_view    = pole_view
-        self.nopole_view  = nopole_view
+        self.result       = result
+        self.channel      = channel
+        self.table_params = table_params
         self.requester_id = requester_id
+        self.back_view    = None  # wird von PoleChoiceView gesetzt
+
+        if result:
+            mins  = int(result.total_time_s // 60)
+            secs  = result.total_time_s % 60
+            short = "-".join(f"{n}{t[0]}" for t, n in result.stints)
+            label = f"{mins}:{secs:06.3f} {short}"[:80]
+            btn   = discord.ui.Button(label=label, style=discord.ButtonStyle.success, row=0)
+            btn.callback = self._show_detail
+            self.add_item(btn)
+
+        back_btn = discord.ui.Button(label="← Zurück", style=discord.ButtonStyle.secondary, row=1)
+        back_btn.callback = self._back
+        self.add_item(back_btn)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.requester_id and interaction.user.id != self.requester_id:
@@ -675,20 +700,107 @@ class PoleChoiceView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="🏁 Pole", style=discord.ButtonStyle.primary)
-    async def pole(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _show_detail(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        table = build_single_column(
+            self.result.description, self.result,
+            pole=self.result.pole,
+            **self.table_params
+        )
+        lines = table.split("\n")
+        chunk = "```\n"
+        for line in lines:
+            if len(chunk) + len(line) + 2 > 1950:
+                await self.channel.send(chunk + "```")
+                chunk = "```\n" + line + "\n"
+            else:
+                chunk += line + "\n"
+        await self.channel.send(chunk + "```")
+        await interaction.edit_original_response(
+            content="Weitere Detailansicht:",
+            view=self
+        )
+
+    async def _back(self, interaction: discord.Interaction):
+        if self.back_view:
+            await interaction.response.edit_message(
+                content="**Detailansicht:** Wähle eine Kategorie:",
+                view=self.back_view
+            )
+        else:
+            await interaction.response.defer()
+
+
+class PoleChoiceView(discord.ui.View):
+    """Erste Stufe: Pole oder Nicht-Pole wählen, inkl. Mono-Reifen-Varianten."""
+    def __init__(self, pole_view, nopole_view,
+                 mono_pole_view, mono_nopole_view,
+                 requester_id: int):
+        super().__init__(timeout=300)
+        self.pole_view        = pole_view
+        self.nopole_view      = nopole_view
+        self.mono_pole_view   = mono_pole_view
+        self.mono_nopole_view = mono_nopole_view
+        self.requester_id     = requester_id
+
+        # Buttons dynamisch hinzufügen damit sie nur erscheinen wenn Daten vorhanden
+        pole_btn = discord.ui.Button(
+            label="🏁 Pole – Top 5", style=discord.ButtonStyle.primary, row=0)
+        pole_btn.callback = self._pole_callback
+        self.add_item(pole_btn)
+
+        nopole_btn = discord.ui.Button(
+            label="🚦 Nicht-Pole – Top 5", style=discord.ButtonStyle.secondary, row=0)
+        nopole_btn.callback = self._nopole_callback
+        self.add_item(nopole_btn)
+
+        if mono_pole_view:
+            mono_pole_btn = discord.ui.Button(
+                label="🏁 Pole – Schnellster Reifen", style=discord.ButtonStyle.primary, row=1)
+            mono_pole_btn.callback = self._mono_pole_callback
+            self.add_item(mono_pole_btn)
+
+        if mono_nopole_view:
+            mono_nopole_btn = discord.ui.Button(
+                label="🚦 Nicht-Pole – Schnellster Reifen", style=discord.ButtonStyle.secondary, row=1)
+            mono_nopole_btn.callback = self._mono_nopole_callback
+            self.add_item(mono_nopole_btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.requester_id and interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "Diese Auswahl ist nur für denjenigen, der die Strategie angefordert hat.",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    async def _pole_callback(self, interaction: discord.Interaction):
         self.pole_view.back_view = self
         await interaction.response.edit_message(
-            content="**Pole** – wähle eine Strategie für die Detailansicht:",
+            content="**Pole – Top 5** – wähle eine Strategie für die Detailansicht:",
             view=self.pole_view
         )
 
-    @discord.ui.button(label="🚦 Nicht-Pole", style=discord.ButtonStyle.secondary)
-    async def nopole(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _nopole_callback(self, interaction: discord.Interaction):
         self.nopole_view.back_view = self
         await interaction.response.edit_message(
-            content="**Nicht-Pole** – wähle eine Strategie für die Detailansicht:",
+            content="**Nicht-Pole – Top 5** – wähle eine Strategie für die Detailansicht:",
             view=self.nopole_view
+        )
+
+    async def _mono_pole_callback(self, interaction: discord.Interaction):
+        self.mono_pole_view.back_view = self
+        await interaction.response.edit_message(
+            content="**Pole – Schnellster Reifen** – Detailansicht:",
+            view=self.mono_pole_view
+        )
+
+    async def _mono_nopole_callback(self, interaction: discord.Interaction):
+        self.mono_nopole_view.back_view = self
+        await interaction.response.edit_message(
+            content="**Nicht-Pole – Schnellster Reifen** – Detailansicht:",
+            view=self.mono_nopole_view
         )
 
 
