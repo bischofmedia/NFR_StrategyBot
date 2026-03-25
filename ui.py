@@ -834,6 +834,7 @@ class StartVariantView(discord.ui.View):
             race_context=ctx,
             pole=self.pole,
             back_view=self,
+            root_view=self.back_view,  # PoleChoiceView – für Neupost nach Submit
         )
         await interaction.response.send_modal(modal)
 
@@ -866,20 +867,21 @@ class CustomStrategyModal(Modal, title="Benutzerdefinierte Strategie"):
         max_length=100,
     )
 
-    def __init__(self, channel, table_params, race_context, pole: bool, back_view):
+    def __init__(self, channel, table_params, race_context, pole: bool, back_view, root_view=None):
         super().__init__()
         self.channel      = channel
         self.table_params = table_params
         self.race_context = race_context
         self.pole         = pole
         self.back_view    = back_view
+        self.root_view    = root_view  # PoleChoiceView für Neupost nach Submit
 
     async def on_submit(self, interaction: discord.Interaction):
         raw = str(self.stints_input).strip()
         await _handle_custom_strategy(interaction, raw,
                                       self.channel, self.table_params,
                                       self.race_context, self.pole,
-                                      self.back_view)
+                                      self.back_view, self.root_view)
 
 
 def _parse_custom_stints(raw: str) -> list | None:
@@ -905,7 +907,7 @@ def _parse_custom_stints(raw: str) -> list | None:
 
 
 async def _handle_custom_strategy(interaction, raw, channel, table_params,
-                                   race_context, pole, back_view):
+                                   race_context, pole, back_view, root_view=None):
     stints = _parse_custom_stints(raw)
 
     if stints is None:
@@ -1022,5 +1024,9 @@ async def _handle_custom_strategy(interaction, raw, channel, table_params,
 
     await interaction.response.defer(ephemeral=True)
     await _send_table(channel, result, table_params, pole)
-    await interaction.edit_original_response(
-        content="Weitere Detailansicht:", view=back_view)
+    # root_view (PoleChoiceView) neu in den Channel posten damit die Auswahl
+    # wieder verfügbar ist – edit_original_response funktioniert nach Modal-Submit nicht zuverlässig
+    if root_view is not None:
+        await channel.send("**Detailansicht:** Wähle deine Startposition:", view=root_view)
+    else:
+        await channel.send("**Detailansicht:** Wähle deine Startposition:", view=back_view)
