@@ -88,7 +88,8 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
         else:
             print(f"[Zeiten] Hard aus Daten: {hard_s:.3f}s")
     
-    print(f"[Zeiten] Soft={soft_s:.3f} Medium={medium_s:.3f} Hard={hard_s:.3f if hard_s else 'n/a'}")
+    hard_str = f"{hard_s:.3f}" if hard_s else "n/a"
+    print(f"[Zeiten] Soft={soft_s:.3f} Medium={medium_s:.3f} Hard={hard_str}")
 
     medium_pct = (medium_s - soft_s) / soft_s * 100
     hard_pct   = (hard_s - soft_s)   / soft_s * 100 if hard_s else 0
@@ -360,16 +361,14 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
 # ─────────────────────────────────────────────
 
 def make_modal(nickname, track, version, brand, model, total_laps,
-               channel, hard_enabled, league=DEFAULT_LEAGUE, prefill=None,
-               settings=None):
-    start_pct_modal = int(float(str((settings or {}).get("start_fuel_pct", 70))))
+               channel, hard_enabled, league=DEFAULT_LEAGUE, prefill=None):
     if hard_enabled:
         class ModalHard(Modal, title="Deine Daten eingeben"):
             zeit_soft   = TextInput(label="Rundenzeit auf Soft (m:ss.mmm)",            placeholder="z.B. 1:49.300", required=True)
             zeit_medium = TextInput(label="Rundenzeit auf Medium (leer = Durchschnitt)",placeholder="z.B. 1:50.400 (optional)", required=False)
             zeit_hard   = TextInput(label="Rundenzeit auf Hard (leer = Durchschnitt)",  placeholder="z.B. 1:52.000 (optional)", required=False)
             max_soft    = TextInput(label="Maximale Runden auf Soft",                   placeholder="z.B. 13",       required=True)
-            reichweite  = TextInput(label=f"Reichweite bei {start_pct_modal}% Tank (Runden)", placeholder="z.B. 15", required=True)
+            reichweite  = TextInput(label="Reichweite bei 70% Tank (Runden)",           placeholder="z.B. 15",       required=True)
             def __init__(self):
                 super().__init__()
                 self._p = (nickname, track, version, brand, model, total_laps, channel, league)
@@ -389,7 +388,7 @@ def make_modal(nickname, track, version, brand, model, total_laps,
             zeit_soft   = TextInput(label="Rundenzeit auf Soft (m:ss.mmm)",            placeholder="z.B. 1:49.300", required=True)
             zeit_medium = TextInput(label="Rundenzeit auf Medium (leer = Durchschnitt)",placeholder="z.B. 1:50.400 (optional)", required=False)
             max_soft    = TextInput(label="Maximale Runden auf Soft",                   placeholder="z.B. 13",       required=True)
-            reichweite  = TextInput(label=f"Reichweite bei {start_pct_modal}% Tank (Runden)", placeholder="z.B. 15", required=True)
+            reichweite  = TextInput(label="Reichweite bei 70% Tank (Runden)",           placeholder="z.B. 15",       required=True)
             def __init__(self):
                 super().__init__()
                 self._p = (nickname, track, version, brand, model, total_laps, channel, league)
