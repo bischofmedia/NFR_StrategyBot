@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import discord
 from discord.ui import Modal, TextInput, View, Button
 from strategy import (
@@ -61,15 +63,15 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
     fw_s             = f("fuel_weight_s",         0.7)
     gemini_aktiv     = b("gemini",                True)
 
-    track_data = get_track_data(track, version)
-    pit_loss   = track_data["pit_loss_s"] or f("pit_loss_s", 25)
+    track_data  = await asyncio.to_thread(get_track_data, track, version)
+    pit_loss    = track_data["pit_loss_s"] or f("pit_loss_s", 25)
     pit_windows = parse_pit_windows(settings)
 
     soft_s   = to_float(data["zeit_soft_s"])
     medium_s = to_float(data["zeit_medium_s"])
     hard_s   = to_float(data.get("zeit_hard_s")) if hard_allowed else None
 
-    avg = get_driver_avg_pct(nickname, league)
+    avg = await asyncio.to_thread(get_driver_avg_pct, nickname, league)
 
     # Medium: aus Daten oder Durchschnitt (nur Src=1) oder Settings
     if medium_s is None or medium_s <= 0:
@@ -122,14 +124,14 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
     )
 
     vm = build_verkehr_malus(settings)
-    import asyncio, functools
     all_pole    = await asyncio.to_thread(functools.partial(calculate_strategies, **common, pole=True,  verkehr_malus=vm))
     all_no_pole = await asyncio.to_thread(functools.partial(calculate_strategies, **common, pole=False, verkehr_malus=vm))
 
     # Gemini oder Fallback
     gemini_result = None
     if gemini_aktiv:
-        gemini_result = get_gemini_strategies(
+        gemini_result = await asyncio.to_thread(functools.partial(
+            get_gemini_strategies,
             all_results_pole=all_pole,
             all_results_no_pole=all_no_pole,
             track=track, version=version, car=car_display,
@@ -139,7 +141,7 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
             reichweite=int(str(data["reichweite_70pct"]).replace(",",".").split(".")[0]),
             tank_size=tank_size, start_fuel_pct=start_pct,
             pit_loss=pit_loss, fuel_weight_s=fw_s,
-        )
+        ))
 
     used_gemini = gemini_result is not None
     if not used_gemini:
@@ -507,7 +509,7 @@ async def _handle_submit(interaction, nickname, track, version, brand, model,
         "soft_src": SRC_EINGABE, "medium_src": medium_src,
         "hard_src": hard_src if hard_allowed else None,
     }
-    save_driver_data(nickname, track, version, brand, model, data, league)
+    await asyncio.to_thread(save_driver_data, nickname, track, version, brand, model, data, league)
 
     msg = await interaction.followup.send("✅ Daten gespeichert! Strategie wird berechnet...", ephemeral=True)
     await calculate_and_post(channel, nickname, track, version, brand, model,
