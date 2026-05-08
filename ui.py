@@ -394,7 +394,7 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
 # ─────────────────────────────────────────────
 
 def make_modal(nickname, track, version, brand, model, total_laps,
-               channel, hard_enabled, league=DEFAULT_LEAGUE, prefill=None):
+               channel, hard_enabled, league=DEFAULT_LEAGUE, prefill=None, **kwargs):
     if hard_enabled:
         class ModalHard(Modal, title="Deine Daten eingeben"):
             zeit_soft   = TextInput(label="Rundenzeit auf Soft (m:ss.mmm)",            placeholder="z.B. 1:49.300", required=True)
