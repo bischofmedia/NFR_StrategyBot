@@ -122,8 +122,9 @@ async def calculate_and_post(channel, nickname, track, version, brand, model,
     )
 
     vm = build_verkehr_malus(settings)
-    all_pole    = calculate_strategies(**common, pole=True, verkehr_malus=vm)
-    all_no_pole = calculate_strategies(**common, pole=False, verkehr_malus=vm)
+    import asyncio, functools
+    all_pole    = await asyncio.to_thread(functools.partial(calculate_strategies, **common, pole=True,  verkehr_malus=vm))
+    all_no_pole = await asyncio.to_thread(functools.partial(calculate_strategies, **common, pole=False, verkehr_malus=vm))
 
     # Gemini oder Fallback
     gemini_result = None
